@@ -263,7 +263,8 @@ step), key or session errors, live-source failures, backups and restore: see
   and validator; decision engine with risk, chips and scenarios; API, worker, scheduler and web
   app; invite-only accounts and FPL-ID onboarding (M1.1a); Transfer Workbench (M1.2); result
   lifecycle and "What changed?" (M1.3); decision journal with prospective outcome evaluation
-  (M1.4); forecast record and Season Review with the live-season evaluation contract (M1.5).
+  (M1.4); forecast record and Season Review with the live-season evaluation contract (M1.5);
+  transfer ladder and kept / excluded players in the Workbench (M1.7).
 * **Next:** the first formal live look after 8 final live gameweeks (GW7–14 of 2026-27), then any
   calibration change only through a shadow test on later live gameweeks.
 * **Release sprint (October 2026):** the product display name is a setting

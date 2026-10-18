@@ -33,7 +33,8 @@ requirement and marks partial work as PARTIAL (99 requirements: 81 COMPLETE, 15 
 V1 release work after M14 is planned and logged in `docs/V1_RELEASE_PLAN.md`; its verification
 records are §2a and §2b (final). Public deployment waits on operator inputs (host, domain,
 secrets); everything else for V1 is done. Product milestones after V1 are recorded in §2c
-(M1.1a), §2d (M1.2), §2e (M1.3), §2f (M1.4) and §2g (M1.5).
+(M1.1a), §2d (M1.2), §2e (M1.3), §2f (M1.4), §2g (M1.5), §2h (M1.6) and §2j (M1.7); §2i is
+the release sprint.
 
 ## 2. M14 verification record (2026-10-04 – 06, local machine)
 
@@ -503,6 +504,47 @@ fixes (`696472f` API, `6ed0d66` web, `ae71f8c` extension, `56e08c7` ops) —
 `develop` is fast-forwarded only after that run is green. The public deployment and the extension
 release remain NOT RUN; the GW7 capture is recorded in §2g.
 
+## 2j. M1.7 — Transfer ladder and squad constraints in the Workbench (2026-10-19)
+
+Scope (owner directive of 2026-10-18, "build differentiating features", zero spend, no
+deployment dependency): after a source audit of the four candidates — mini-league intelligence,
+transfer-count ladder, structured assistant, decision-quality review — the ladder was chosen as
+the first milestone because every layer it needs already existed and was tested (paired samples,
+independent validator, optimality labels, hit accounting, run store, lifecycle, ownership,
+journal linkage, browser flows), while the mini-league data is adequate but its library is thin
+(single-gameweek head-to-head only, no ingestion, tables, job or page). Four read-only reviews
+(product gaps, mini-league domain, security and data contracts, test coverage) were reconciled
+against source; all four rated the ladder the smallest risk and the best value for the cost.
+
+| Area | Result |
+|---|---|
+| Engine | `Preferences.first_gw_min_transfers` (one MILP row `Σ y[·,0] ≥ k`), off by default and absent from `describe()` until set: every existing problem, plan and identifier is unchanged — `tests/integration/test_golden_parity.py` byte-exact on the development machine, `test_engine_determinism.py` green. Tests: `tests/unit/optimizer/test_first_gw_preferences.py` (+2: a rung is exactly k moves now and never beats the unconstrained plan; the rung at that plan's own count *is* that plan; identifiers) |
+| Workbench evaluation | `PlanSpec.kind = "ladder"` (`max_transfers` ≤ 4 rungs, default every free transfer plus one at a hit, at most 3; `allow_hits`): one request per rung, solved in the same parallel batch as HOLD and the exact plans (`first_gw_min_transfers = first_gw_max_transfers = k`), validated by the rules replay, scored on HOLD's samples (`gain_1gw`, `gain_horizon`, `gross`, `hit_cost_vs_hold`), carrying `rung`; a rung that would pay a hit is listed under `excluded` with its cost when hits are not allowed. Manager constraints through `OptimizationProblem.preferences`: locked players are kept for the whole horizon in every plan (HOLD's later gameweeks included), banned players are never bought nor shortlisted; an exact transfer selling a locked player or a shortlist for one is refused with the rule. Tests: `tests/integration/test_workbench_engine.py` (+2) |
+| API | `WorkbenchIn.preferences` (`locked` ≤ 15, must be owned → `422`; `banned` ≤ 50), stored in the run's request (part of the run id: another question is another run) and echoed in `result.result.problem.preferences` and `assumptions`; a ladder of more than four rungs → `422`; `POST /workbench/evaluate` now draws from the expensive rate bucket (12/min per client by default; the test worlds raise it). Tests: `tests/integration/test_workbench_api.py` (+1) |
+| Web | `/transfers`: the ladder is part of the default question (checkbox, rung count), *Keep* buttons per squad row, an *Exclude a player* picker, a **Transfer ladder** card (rung 0 = hold, then each rung with moves, hit now, net and gross vs hold, p10/p90, P(>hold), bank/FT after, solver status, details; excluded rungs with their reason; the unconstrained best plan's own transfer count; the run's constraints), the run's assumptions shown under the plans table; retry re-sends the run's own preferences |
+| Browser tests | development flows **16/16 in CI's `web-e2e` job on `d5ca10b` (15 flows + sign-in setup); locally the full suite was run once with a wrong assertion of mine (15 passed, the workbench flow failed on it), then the squad and workbench flows were re-run together after the fix: 3/3 in 29.6 s (workbench flow 10.4 s with three evaluations)** (the workbench flow now checks the ladder against the stored run — `transfers_now == rung`, every rung valid, the net gain shown equals `gain_horizon.mean` to two decimals — and that a kept player is never sold in any plan of a new run and the run records the preference); production topology against the rebuilt images ****22 passed, 0 failed, 2 skipped** in 2.1 min (the two topology tests that need the auxiliary web containers), including the workbench flow with the ladder shown as stored and the live FPL-ID import** |
+| Python tests | fast tier **558 passed, 6 deselected** in 8 min 45 s (new: 5); lint, format, mypy (125 files), import-linter 4/4, `tsc`, `next build`: clean |
+| Images | engine `0bfab206eb69`, web `c79f8b268608` built from `d5ca10b` (`FPL_BUILD_REVISION` recorded); all seven services healthy; API `ok` on GW8 snapshot `snap_de4a3744ecc4ef1486b6` |
+| Latency (development machine, Docker stack, `infra/scripts/workbench_latency.py --ladder 3`) | the page's default question plus a 3-rung ladder (HOLD + 3 replacements + best + 1 alternative + 3 rungs = 9 plans): `POST /workbench/evaluate` answers in 27 ms (`202`), served **15.7 s** after submission at 3 GW (solver 8.7 s, of which optimise 5.8 s) and **37.3 s** at 5 GW (solver 30.5 s, optimise 25.7 s), against 10.4 s / 64 s for the 6-plan question at M1.2 (the 5 GW figure then included a cold worker); the same question again 20–21 ms; `GET /workbench/runs/{id}` p50 / p95 15 / 17 ms; `GET /workbench/context` 23–26 / 31–35 ms |
+| Security and ownership | the ladder and preferences ride on the existing run routes: ownership by the router dependency and `require_owner` on the run and job routes (cross-user `403` re-run in `test_workbench_api.py`), export and erasure unchanged (the preferences live inside the run's `request_json`); no new table, job kind, external call or credential; the evaluate route's new rate bucket closes the review's "unbounded solver jobs per client" note |
+
+CI: `d5ca10b` — [run 39160978461](https://github.com/adivishall/fpl-copilot/actions/runs/39160978461) **success** on every job: lint, security, test, optimiser suite, web e2e (16/16 browser flows) and container builds.
+This documentation commit is checked by its own run; `develop` is fast-forwarded only after it is
+green.
+
+Decisions and limitations: 54. A rung means *exactly* k transfers now; the unconstrained best
+plan can use fewer, so a later rung scoring below an earlier one says the extra move does not pay
+on this forecast — it is shown, never hidden, with the best plan's own count beside it. 55. Hits
+in a rung follow from the stored free transfers and transfers already made (no chip is played
+in a workbench plan); a per-gameweek hit *budget* beyond "allow hits or not" is not offered, and
+forced transfers remain the `transfer` kind. 56. Locked players bind HOLD's later gameweeks too,
+so with a lock the baseline is "hold now and keep them", which is the comparison the manager
+asked for. 57. Defects 52 and 53 stand: rungs on a squad with an inherited club excess carry the
+"best valid plan among those explored" label like any other plan, and cross-machine parity is
+still enforced on the development platform only. Not done in this milestone: multi-out exact
+repairs from the page (the API accepts them), precomputed shortlists, the hit view as a separate
+page, and the mini-league workflow (next milestone; design notes in §7).
+
 ## 3. Environment
 
 Apple M4 (10 logical CPUs), 16 GB RAM, macOS 27.0.1; Python 3.12.15 (uv), Node 22.23, PostgreSQL
@@ -537,7 +579,10 @@ Genuinely open items, in priority order (details in the audit and limitations):
 
 1. ~~Ingest completed-gameweek results from the live API~~ — done in the V1 work (§2a).
 2. Real per-user authentication/authorisation if the system is ever exposed beyond a trusted group.
-3. Expose league analytics (head-to-head, template, differential) through the API/UI.
+3. Expose league analytics (head-to-head, template, differential) through the API/UI — the
+   next product milestone after M1.7 (§2j): the standings and picks clients and the
+   head-to-head library exist; a paced import job, a manager-keyed store with export and
+   erasure, overtake probabilities on the joint simulation and a page are the work.
 4. A public deployment target (VM + TLS reverse proxy; the host script and every owner input
    are listed in §2i — the host, domain and name are still missing), the browser extension's
    release ZIP and Chrome Web Store submission (§2i), Alertmanager routing, and archival of
