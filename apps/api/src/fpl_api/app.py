@@ -56,6 +56,14 @@ from fpl_api.journal import (
     evidence_from_workbench,
 )
 from fpl_api.journal_summary import summary as journal_summary
+from fpl_api.league import (
+    MAX_LEAGUES_PER_MANAGER,
+    MAX_STANDINGS_PAGES,
+    REFRESH_COOLDOWN,
+    client_factory,
+    cooldown_remaining,
+    picks_gameweek,
+)
 from fpl_api.ledger import season_gameweeks
 from fpl_api.lifecycle import explain_changes, follow_promotion, lifecycle_block
 from fpl_api.lineage import trace
@@ -381,6 +389,253 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             "job_id": job_id,
             "recommendation": summary,
         }
+
+    # ------------------------------------------------------------------ mini-league room (M1.8)
+    available_cache: dict[int, tuple[float, list[dict[str, Any]]]] = {}
+
+    def league_staleness(row: dict[str, Any], manager_key: str) -> dict[str, Any]:
+        """Why a stored league view may no longer describe today: the squad was saved again,
+        a newer snapshot is served, or a deadline passed since the rivals' picks were read."""
+        ctx = svc.context()
+        latest = svc.states.latest(manager_key) if svc.states is not None else None
+        latest_id = latest[0] if latest else None
+        a, data = row.get("analysis"), row.get("data")
+        reasons: list[str] = []
+        if a is not None:
+            if latest_id and a.get("state_id") != latest_id:
+                reasons.append("your squad was saved again after this outlook was computed")
+            if a.get("snapshot_id") != svc.data.snapshot_id:
+                reasons.append("a newer data snapshot is served than the one this outlook used")
+        expected = picks_gameweek(ctx)
+        data_stale = data is not None and data.get("picks_gameweek") != expected
+        if data_stale:
+            reasons.append(
+                "a deadline has passed since the standings and rivals' picks were read; "
+                "refresh to read them again"
+            )
+        return {
+            "state_id": latest_id,
+            "analysis_stale": a is not None and len(reasons) > int(data_stale),
+            "data_stale": data_stale,
+            "reasons": reasons,
+            "expected_picks_gameweek": expected,
+        }
+
+    def league_view(row: dict[str, Any], manager_key: str) -> dict[str, Any]:
+        job = jobs.get(row["job_id"]) if row.get("job_id") else None
+        if (
+            job is not None
+            and job["status"] in ("failed", "succeeded")
+            and row["status"] in ("queued", "running")
+        ):  # the job ended without finishing the refresh (worker lost, or given up on)
+            assert svc.leagues is not None
+            svc.leagues.finish(
+                manager_key,
+                int(row["league_id"]),
+                data=None,
+                fetched=False,
+                analysis=None,
+                error=(job.get("error") or "the refresh ended without a result").split("\n")[0],
+            )
+            row = svc.leagues.get(manager_key, int(row["league_id"])) or row
+        wait = cooldown_remaining(row, datetime.now(UTC))
+        return {
+            **row,
+            "staleness": league_staleness(row, manager_key),
+            "cooldown_seconds": int(wait.total_seconds()),
+            "job": job,
+            "freshness": fresh(),
+        }
+
+    def submit_league_job(manager_key: str, league_id: int, fetch: bool, tag: str) -> str:
+        assert svc.leagues is not None
+        job = jobs.submit(
+            "league_refresh",
+            {"manager_key": manager_key, "league_id": league_id, "fetch": fetch, "tag": tag},
+        )
+        svc.leagues.set_job(manager_key, league_id, job)
+        return job
+
+    def league_response(manager_key: str, league_id: int) -> JSONResponse:
+        assert svc.leagues is not None
+        row = svc.leagues.get(manager_key, league_id)
+        if row is None:
+            raise HTTPException(404, "this league is not followed by this manager")
+        view = league_view(row, manager_key)
+        pending = view["status"] in ("queued", "running")
+        return JSONResponse(_jsonable(view), status_code=202 if pending else 200)
+
+    @r.get("/leagues")
+    def leagues_list(
+        manager_key: str = Query(..., max_length=64, pattern=KEY_PATTERN),
+    ) -> dict[str, Any]:
+        """The classic leagues this manager follows (summaries; no standings)."""
+        need_db()
+        assert svc.leagues is not None and svc.states is not None
+        latest = svc.states.latest(manager_key)
+        return {
+            "manager_key": manager_key,
+            "leagues": svc.leagues.for_manager(manager_key),
+            "entry_id": latest[1].manager_id if latest else None,
+            "has_squad": latest is not None,
+            "max_leagues": MAX_LEAGUES_PER_MANAGER,
+            "live_source": client_factory(svc) is not None,
+            "freshness": fresh(),
+        }
+
+    @r.get("/leagues/available")
+    def leagues_available(
+        manager_key: str = Query(..., max_length=64, pattern=KEY_PATTERN),
+    ) -> dict[str, Any]:
+        """The classic leagues of the manager's own FPL team (squads imported with an FPL ID):
+        one public request, kept for ten minutes per FPL ID."""
+        _, st = load_state(manager_key)
+        if st.manager_id is None:
+            return {"entry_id": None, "leagues": [], "reason": "squad entered manually"}
+        factory = client_factory(svc)
+        if factory is None:
+            raise HTTPException(503, "live FPL source disabled by configuration")
+        now = time.monotonic()
+        hit = available_cache.get(st.manager_id)
+        if hit is None or now - hit[0] > REFRESH_COOLDOWN.total_seconds():
+            try:
+                _, entry = factory().entry(st.manager_id)
+            except HttpStatusError as exc:
+                raise HTTPException(
+                    502, f"the FPL API refused the request (HTTP {exc.status})"
+                ) from exc
+            except SourceUnavailableError as exc:
+                raise HTTPException(503, "live FPL API unavailable from this deployment") from exc
+            except ValidationError as exc:
+                log.warning("fpl_api_contract_violation", errors=exc.error_count())
+                raise HTTPException(
+                    502, "the FPL API answered, but its payload failed validation"
+                ) from exc
+            leagues = [
+                {
+                    "league_id": c.id,
+                    "name": c.name,
+                    "kind": "invitational" if c.league_type == "x" else "public",
+                    "entry_rank": c.entry_rank,
+                    "rank_count": c.rank_count,
+                    "supported": c.entry_rank is not None
+                    and c.entry_rank <= MAX_STANDINGS_PAGES * 50,
+                }
+                for c in (entry.leagues.classic if entry.leagues else [])
+            ]
+            if len(available_cache) > 1000:
+                available_cache.clear()
+            available_cache[st.manager_id] = (now, leagues)
+            hit = available_cache[st.manager_id]
+        return {
+            "entry_id": st.manager_id,
+            "leagues": hit[1],
+            "max_rank": MAX_STANDINGS_PAGES * 50,
+            "source": "fantasy.premierleague.com (public entry endpoint)",
+        }
+
+    @r.post("/leagues")
+    def leagues_attach(body: s.LeagueIn) -> JSONResponse:
+        """Follow a classic league and read it now (a job): standings, the nearest rivals'
+        public picks after the last deadline, and the outlook for the current squad."""
+        need_db()
+        assert svc.leagues is not None
+        _, st = load_state(body.manager_key)
+        entry_id = body.entry_id or st.manager_id
+        if entry_id is None:
+            raise HTTPException(
+                422, "your squad was entered manually: give your FPL ID (entry_id) as well"
+            )
+        if client_factory(svc) is None:
+            raise HTTPException(503, "live FPL source disabled by configuration")
+        existing = svc.leagues.get(body.manager_key, body.league_id)
+        if existing is None and (
+            len(svc.leagues.for_manager(body.manager_key)) >= MAX_LEAGUES_PER_MANAGER
+        ):
+            raise HTTPException(
+                409, f"at most {MAX_LEAGUES_PER_MANAGER} leagues per manager; remove one first"
+            )
+        if existing is not None:
+            if existing["status"] in ("queued", "running"):
+                return league_response(body.manager_key, body.league_id)
+            wait = cooldown_remaining(existing, datetime.now(UTC))
+            if wait.total_seconds() > 0 and existing["entry_id"] == entry_id:
+                raise HTTPException(
+                    429,
+                    "this league was read less than "
+                    f"{int(REFRESH_COOLDOWN.total_seconds() // 60)} minutes ago",
+                    headers={"Retry-After": str(int(wait.total_seconds()) + 1)},
+                )
+        svc.leagues.queue(body.manager_key, body.league_id, entry_id)
+        submit_league_job(body.manager_key, body.league_id, True, uuid.uuid4().hex[:12])
+        return league_response(body.manager_key, body.league_id)
+
+    @r.get("/leagues/{league_id}")
+    def league_get(
+        league_id: int = PathParam(..., ge=1, le=50_000_000),
+        manager_key: str = Query(..., max_length=64, pattern=KEY_PATTERN),
+    ) -> JSONResponse:
+        """A followed league: observed standings and rivals as read, and the outlook. When the
+        squad or the served snapshot changed since the outlook, it is recomputed as a job (no
+        new request to FPL) and the previous one is served meanwhile, marked stale."""
+        need_db()
+        assert svc.leagues is not None
+        row = svc.leagues.get(manager_key, league_id)
+        if row is None:
+            raise HTTPException(404, "this league is not followed by this manager")
+        # only after a successful refresh: a failed one is retried by the manager, not by
+        # every page view
+        if row.get("data") and row["status"] == "succeeded":
+            st = league_staleness(row, manager_key)
+            if (st["analysis_stale"] or row.get("analysis") is None) and st["state_id"]:
+                svc.leagues.queue(manager_key, league_id, int(row["entry_id"]))
+                submit_league_job(
+                    manager_key,
+                    league_id,
+                    False,
+                    f"{st['state_id']}|{row.get('fetched_at')}",
+                )
+        return league_response(manager_key, league_id)
+
+    @r.post("/leagues/{league_id}/refresh")
+    def league_refresh(
+        body: s.LeagueRefreshIn, league_id: int = PathParam(..., ge=1, le=50_000_000)
+    ) -> JSONResponse:
+        need_db()
+        assert svc.leagues is not None
+        row = svc.leagues.get(body.manager_key, league_id)
+        if row is None:
+            raise HTTPException(404, "this league is not followed by this manager")
+        if row["status"] in ("queued", "running"):
+            return league_response(body.manager_key, league_id)
+        if body.fetch:
+            if client_factory(svc) is None:
+                raise HTTPException(503, "live FPL source disabled by configuration")
+            wait = cooldown_remaining(row, datetime.now(UTC))
+            if wait.total_seconds() > 0:
+                raise HTTPException(
+                    429,
+                    "this league was read less than "
+                    f"{int(REFRESH_COOLDOWN.total_seconds() // 60)} minutes ago",
+                    headers={"Retry-After": str(int(wait.total_seconds()) + 1)},
+                )
+        elif not row.get("data"):
+            raise HTTPException(409, "nothing to recompute: this league has not been read yet")
+        svc.leagues.queue(body.manager_key, league_id, int(row["entry_id"]))
+        submit_league_job(body.manager_key, league_id, body.fetch, uuid.uuid4().hex[:12])
+        return league_response(body.manager_key, league_id)
+
+    @r.delete("/leagues/{league_id}")
+    def league_delete(
+        league_id: int = PathParam(..., ge=1, le=50_000_000),
+        manager_key: str = Query(..., max_length=64, pattern=KEY_PATTERN),
+    ) -> dict[str, Any]:
+        """Stop following a league: its stored standings, rivals and outlook are deleted."""
+        need_db()
+        assert svc.leagues is not None
+        if not svc.leagues.delete(manager_key, league_id):
+            raise HTTPException(404, "this league is not followed by this manager")
+        return {"deleted": True}
 
     # ------------------------------------------------------------------ transfer workbench (M1.2)
     def workbench_view(run: dict[str, Any]) -> dict[str, Any]:

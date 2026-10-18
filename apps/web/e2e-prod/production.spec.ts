@@ -566,6 +566,40 @@ test("onboarding imports a real FPL team by ID through the proxy (E2E_FPL_ENTRY_
   await web.delete(`/backend/managers/${imported.manager_key}`); // leave nothing behind
 });
 
+test("mini-league: a real classic league is read through the worker and shown with its outlook (E2E_FPL_LEAGUE_ID)", async ({ page }) => {
+  const entry = process.env.E2E_FPL_ENTRY_ID;
+  const league = process.env.E2E_FPL_LEAGUE_ID;
+  test.skip(!entry || !league, "E2E_FPL_ENTRY_ID and E2E_FPL_LEAGUE_ID not provided (a public FPL entry and a classic league it is in the top 150 of)");
+  // a manager imported with that FPL ID, owned by this account, active in the browser
+  const mgr = await (await web.post("/backend/auth/managers", { data: { label: `league-${entry}` } })).json();
+  const lkey = mgr.manager_key as string;
+  const sync = await web.post("/backend/squad/sync", { data: { manager_key: lkey, manager_id: Number(entry) } });
+  expect(sync.ok(), await sync.text()).toBe(true);
+  await page.context().addCookies(cookies);
+  await page.addInitScript((k) => {
+    window.localStorage.setItem("fpl.settings.v1", JSON.stringify({ managerKey: k, profile: "default", horizon: 3 }));
+  }, lkey);
+  try {
+    await page.goto("/league");
+    await expect(page.getByTestId("league-available")).toBeVisible(); // the entry's own leagues
+    await expect(page.getByTestId("league-entry")).toHaveValue(entry!);
+    await page.getByTestId("league-id").fill(league!);
+    await page.getByTestId("follow-league").click();
+    await expect(page.getByTestId("league-state")).toHaveAttribute("data-state", "succeeded", { timeout: 420_000 }); // queued → worker → paced FPL requests
+    await expect(page.getByTestId(`standing-${entry}`)).toContainText("you");
+    const v = await (await web.get(`/backend/leagues/${league}?manager_key=${lkey}`)).json();
+    expect(v.data.me.entry).toBe(Number(entry));
+    expect(v.analysis.state_id).toBe((await sync.json()).state_id);
+    for (const r of v.analysis.rivals as { entry: number; unavailable: string | null; outlook: { probability_ahead_after: number } | null }[]) {
+      if (r.outlook) await expect(page.getByTestId(`p-after-${r.entry}`)).toContainText(`${(100 * r.outlook.probability_ahead_after).toFixed(0)}%`);
+      else await expect(page.getByTestId(`rival-unavailable-${r.entry}`)).toContainText("nothing is estimated");
+    }
+    await expect(page.getByTestId("refresh-league")).toBeDisabled(); // re-reading FPL is rate-limited
+  } finally {
+    await web.delete(`/backend/managers/${lkey}`); // erases the league data with the manager
+  }
+});
+
 test("player picker on the squad page searches the live pool", async ({ page }) => {
   await asManager(page);
   await page.goto("/squad");

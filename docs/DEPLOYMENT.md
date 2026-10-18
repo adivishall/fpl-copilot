@@ -301,6 +301,10 @@ the vaastav repository on `raw.githubusercontent.com`. Where egress to the live 
 permitted, set `FPL_LIVE_SYNC_ENABLED=false`: the system runs in **degraded mode** — it serves
 the last validated snapshot, every response's `freshness` block says so, recommendations list it
 under assumptions, and `/squad/sync` answers `503` with guidance to enter the squad manually.
+The mini-league room (M1.8) reads standings and picks through the same paced client
+(one request per second within a refresh; at most 3 standings pages + 2 requests for each of
+at most 11 rivals, i.e. ≤ 25 requests; one re-read per league every 10 minutes) and answers `503` when the
+live source is disabled.
 
 ## Upgrades and rollback
 
@@ -333,7 +337,10 @@ under assumptions, and `/squad/sync` answers `503` with guidance to enter the sq
   forecast record and every season evaluation** — the frozen live forecasts cannot be recreated
   (`pg_dump` first; restore it to keep them). Roll the images and the schema back together (an
   M1.5 image needs `0006`). `0007` re-keys `forecast_promotions` by (snapshot, forecast key); its
-  downgrade keeps each snapshot's first promotion. To roll back the
+  downgrade keeps each snapshot's first promotion. M1.8 adds `0009` (`manager_leagues`, the
+  leagues each manager follows with the standings and rivals' public picks as read and the
+  computed outlook); rolling it back drops the table — the data is re-readable public data,
+  so managers only have to follow their leagues again. To roll back the
   schema: `docker compose run --rm migrate alembic downgrade -1` with the previous image.
 * **Images**: pin the previous tag in `docker-compose.override.yml` and `up -d`.
 * **Forecast horizon or model configuration changes** invalidate the serving forecast's key:
@@ -456,6 +463,14 @@ Recovery time measured here: ~1.5 minutes to a running stack, plus the serving f
   manager it owns, its sessions and its analytics events.
 * Both are recorded in `audit_log` with a SHA-256 of the key only.
 * No FPL credentials are accepted or stored anywhere; sync uses the public entry id.
+* **Mini-league data of people who are not users (M1.8).** Following a classic league stores,
+  for that manager only (`manager_leagues`), the league's public standings as read (up to 150
+  entries: team names, manager names as FPL publishes them, ranks and points) and the public
+  picks of at most eleven nearest rivals. It is never shared between users (two users following
+  the same league each have their own copy), is overwritten on every refresh, is exported with
+  the manager, and is deleted when the manager stops following the league, erases the manager
+  or deletes the account. League ids are pseudonymised in rejected-request logs; names and
+  league ids are not logged.
 
 ## Observability
 

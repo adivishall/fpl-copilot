@@ -2,7 +2,8 @@
 
 * canonical snapshot exported from the committed real-data excerpt (2024-25, 2025-26, 2026-27);
 * PostgreSQL: ``$FPL_E2E_DATABASE_URL`` (CI service) or a throw-away local cluster;
-* Alembic migrations, then uvicorn on :8000 (blocking).
+* Alembic migrations, then uvicorn on :8000 (blocking);
+* a synthetic FPL league client for the mini-league room (``tests/league_fake.py``).
 
 Usage (repo root): uv run python infra/scripts/e2e_api.py
 Test helper: uv run python infra/scripts/e2e_api.py seed-legacy-decision KEY REC_ID LATER_ID
@@ -200,9 +201,19 @@ def main() -> None:
         )
         _seed_gameweeks(url, ds_a)
         from fpl_api.app import create_app  # noqa: PLC0415 (reads env set above)
+        from fpl_api.container import AppServices  # noqa: PLC0415
         from fpl_api.settings import Settings  # noqa: PLC0415
+        from tests.league_fake import fake_from_dataset  # noqa: PLC0415
 
-        uvicorn.run(create_app(Settings()), host="127.0.0.1", port=8000, log_level="warning")
+        settings = Settings()
+        svc = AppServices.build(settings)
+        # M1.8: the mini-league room reads a synthetic league (no network in this stack): league
+        # 4242, the manager's entry 900008 at rank 8 of 20, rivals' squads drawn from the
+        # registry; the live FPL source itself stays disabled
+        svc.extras["fpl_client_factory"] = lambda: fake_from_dataset(
+            svc.data.ds, svc.context().season
+        )
+        uvicorn.run(create_app(settings, svc), host="127.0.0.1", port=8000, log_level="warning")
 
 
 if __name__ == "__main__":

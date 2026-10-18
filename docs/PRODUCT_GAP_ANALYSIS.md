@@ -185,6 +185,13 @@ open.
 
 ### C9. Mini-league and rival-aware strategy (priority 8)
 
+**Status (M1.8, 2026-10-19):** a read-only rival view is implemented (`docs/BUILD_STATUS.md`
+§2k): follow a classic league, read its standings and the nearest rivals' public picks as a
+paced job, and see per rival P(more points this gameweek) and P(above after it) on the joint
+simulation, the captaincy choice against the rivals directly above and below, and what the
+rivals hold that the manager does not. Still missing: scoring Workbench plans against rivals,
+a rank/ownership objective, head-to-head leagues, and automatic re-reads after deadlines.
+
 | | |
 |---|---|
 | **Exists** | Library functions `head_to_head`, `template_gaps`, `plan_choice_vs_rival`, `lineup_points` (`league.py`, test-only); classic-league standings client (`fpl_api.py:122`, no caller); ownership % per snapshot; entry picks fetchable after the deadline |

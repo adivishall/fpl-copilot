@@ -20,7 +20,9 @@ export type EventName =
   | "journal_recorded"
   | "recommendation_followed"
   | "recommendation_dismissed"
-  | "return_visit";
+  | "return_visit"
+  | "league_followed"
+  | "league_viewed";
 
 const OPT_OUT_KEY = "fpl.analytics.optout";
 const LAST_VISIT_KEY = "fpl.analytics.lastvisit";

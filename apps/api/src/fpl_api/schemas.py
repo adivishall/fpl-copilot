@@ -136,6 +136,24 @@ class WorkbenchIn(_Req):
     preferences: WorkbenchPreferencesIn | None = None
 
 
+class LeagueIn(_Req):
+    """Follow a classic mini-league (M1.8): its id from the league's address on
+    fantasy.premierleague.com; ``entry_id`` is the manager's own FPL ID in it (default: the ID
+    of the imported squad)."""
+
+    manager_key: ManagerKey = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    league_id: int = Field(ge=1, le=50_000_000)
+    entry_id: int | None = Field(None, ge=1, le=50_000_000)
+
+
+class LeagueRefreshIn(_Req):
+    """Refresh a followed league: ``fetch`` reads the standings and picks again (rate-limited
+    by a cooldown); without it only the outlook is recomputed for the current squad."""
+
+    manager_key: ManagerKey = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    fetch: bool = True
+
+
 class RegisterIn(_Req):
     invite_code: str = Field(min_length=8, max_length=64)
     email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")

@@ -133,6 +133,20 @@ class ElementSummary(_Api):
     history: list[ApiPlayerHistory]
 
 
+class ApiEntryClassicLeague(_Api):
+    """A classic league the entry belongs to, as listed on the public entry endpoint."""
+
+    id: int = Field(ge=1, le=50_000_000)
+    name: str = Field(max_length=200)
+    league_type: str = Field(max_length=4)  # s = system (overall, club, region), x = invitational
+    entry_rank: int | None = None
+    rank_count: int | None = None
+
+
+class ApiEntryLeagues(_Api):
+    classic: list[ApiEntryClassicLeague] = Field(default_factory=list, max_length=200)
+
+
 class ApiEntry(_Api):
     id: int
     name: str
@@ -142,6 +156,7 @@ class ApiEntry(_Api):
     summary_overall_rank: int | None = None
     last_deadline_bank: int | None = None
     last_deadline_value: int | None = None
+    leagues: ApiEntryLeagues | None = None
 
 
 class ApiHistoryEvent(_Api):
@@ -193,10 +208,10 @@ class ApiTransfer(_Api):
 
 
 class ApiStanding(_Api):
-    entry: int
-    entry_name: str
-    player_name: str
-    rank: int
+    entry: int = Field(ge=1, le=50_000_000)
+    entry_name: str = Field(max_length=200)
+    player_name: str = Field(max_length=200)
+    rank: int = Field(ge=1)
     last_rank: int | None = None
     total: int
     event_total: int
@@ -204,11 +219,17 @@ class ApiStanding(_Api):
 
 class ApiStandingsPage(_Api):
     has_next: bool
-    page: int
-    results: list[ApiStanding]
+    page: int = Field(ge=1)
+    results: list[ApiStanding] = Field(max_length=100)  # FPL serves 50 per page
+
+
+class ApiLeague(_Api):
+    id: int = Field(ge=1, le=50_000_000)
+    name: str = Field(max_length=200)
 
 
 class LeagueStandings(_Api):
+    league: ApiLeague | None = None
     standings: ApiStandingsPage
 
 

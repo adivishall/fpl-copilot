@@ -410,6 +410,8 @@ def test_manager_linked_reads_need_a_key_reference_reads_do_not(tmp_path: Path) 
         "/api/v1/recommendations/rec_x/trace",
         "/api/v1/jobs/job_x",
         "/api/v1/managers/demo/export",
+        "/api/v1/leagues?manager_key=demo",
+        "/api/v1/leagues/4242",  # which league a manager follows is manager-linked (M1.8)
     ]
     with TestClient(app) as c:
         for path in private:
@@ -431,6 +433,12 @@ def test_manager_linked_reads_need_a_key_reference_reads_do_not(tmp_path: Path) 
         assert len(events) == 4
         assert all(f"/managers/k:{hash_key(manager)[:16]}" in e["path"] for e in events)
         assert manager not in repr(logs) and "wrong" not in repr(logs)
+        # a rejected league path is logged with the league id pseudonymised (M1.8)
+        with structlog.testing.capture_logs() as logs:
+            assert c.get("/api/v1/leagues/918273").status_code == 401
+        events = [e for e in logs if e.get("event") == "security_event"]
+        assert events and all("/leagues/l:" in e["path"] for e in events)
+        assert "918273" not in repr(logs)
 
 
 # ----------------------------------------------------------------------------- M13: §74–§76

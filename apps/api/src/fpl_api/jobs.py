@@ -41,6 +41,7 @@ from fpl_api.attestation import read as read_server_time
 from fpl_api.container import AppServices, build_recommendation
 from fpl_api.copilot import compute_squad_analysis
 from fpl_api.journal import run_evaluations
+from fpl_api.league import refresh_league
 from fpl_api.ledger import attest, attest_existence, capture, record_promotion
 from fpl_api.lifecycle import INPUTS_MISMATCH, invalidate_for_snapshot, reason
 from fpl_api.retention import prune
@@ -231,6 +232,15 @@ def _not_reopened(svc: AppServices, run_id: str) -> str:
     )
 
 
+def _job_league(svc: AppServices, p: dict[str, Any]) -> str:
+    """Refresh a manager's mini-league (M1.8): fetch the standings and the nearest rivals'
+    public picks (unless ``fetch`` is false or the cooldown holds), then compute the outlook for
+    the manager's current squad on the serving forecast."""
+    if svc.leagues is None or svc.states is None:
+        raise RuntimeError("database required")
+    return refresh_league(svc, p["manager_key"], int(p["league_id"]), bool(p.get("fetch", True)))
+
+
 def _job_journal(svc: AppServices, p: dict[str, Any]) -> str:
     """Evaluate a manager's decision journal (M1.4): idempotent — unchanged results write
     nothing, so a retry or a second delivery cannot duplicate an evaluation."""
@@ -296,6 +306,7 @@ JOB_KINDS: dict[str, JobFn] = {
     "forecast_capture": _job_forecast_capture,
     "forecast_attest": _job_forecast_attest,
     "season_eval": _job_season_eval,
+    "league_refresh": _job_league,
 }
 # Upper bound on a healthy run of each kind: RQ's job timeout and the de-duplication lease.
 JOB_LEASE: dict[str, timedelta] = {
@@ -311,6 +322,8 @@ JOB_LEASE: dict[str, timedelta] = {
     # one worker runs jobs in turn: the lease covers waiting behind a forecast job
     "forecast_attest": timedelta(minutes=45),
     "season_eval": timedelta(minutes=15),
+    # paced requests (1/s): standings pages + two per rival, plus the outlook
+    "league_refresh": timedelta(minutes=10),
 }
 ABANDONED = "abandoned: no result within the job lease (worker lost or killed)"
 RQ_GRACE = timedelta(minutes=2)

@@ -32,6 +32,8 @@ EVENTS = frozenset(
         "recommendation_followed",
         "recommendation_dismissed",
         "return_visit",
+        "league_followed",
+        "league_viewed",
     }
 )
 PROPS = frozenset(

@@ -128,6 +128,13 @@ def export_manager(engine: Engine, manager_key: str) -> dict[str, Any]:
                     select(m.WorkbenchRunRow).where(m.WorkbenchRunRow.manager_key == manager_key)
                 )
             ),
+            # the leagues this manager follows, with the rivals' public standings and picks as
+            # fetched for them (M1.8): keyed by this manager only, never by a rival's FPL id
+            "manager_leagues": _rows(
+                s.scalars(
+                    select(m.ManagerLeagueRow).where(m.ManagerLeagueRow.manager_key == manager_key)
+                )
+            ),
         }
     data["counts"] = {k: len(v) for k, v in data.items() if isinstance(v, list)}
     return data
@@ -204,6 +211,11 @@ def delete_manager(engine: Engine, manager_key: str, actor: str | None = None) -
         run(
             "squad_analyses",
             delete(m.SquadAnalysisRow).where(m.SquadAnalysisRow.manager_key == manager_key),
+            s,
+        )
+        run(
+            "manager_leagues",
+            delete(m.ManagerLeagueRow).where(m.ManagerLeagueRow.manager_key == manager_key),
             s,
         )
         run("manager_state", delete(m.ManagerStateRow).where(m.ManagerStateRow.id.in_(sid)), s)

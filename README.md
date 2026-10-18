@@ -42,6 +42,7 @@ Premier League or Fantasy Premier League.</sub>
 | **Multi-gameweek planning** (1–5 gameweeks served; the evaluated forecast horizon) | mixed-integer optimisation over budget with exact selling prices, banked free transfers, hits, both chip sets, captain and bench |
 | **Risk and downside** | p10 / p90 of the gain, "what could go wrong" scenarios, stability of the choice under forecast perturbations |
 | **Rules you can trust** | an independent validator replays every plan through the FPL rules; illegal plans are never recommended |
+| **Mini-League room**: follow a classic league; see the published standings and, against the rivals around you, how likely you are to be above them after the next gameweek, which captain protects a lead or chases one, and what your rivals hold that you do not | rivals' squads are their public picks after the last deadline, never guessed; both squads scored on the same simulation samples; observed and modelled numbers kept apart |
 | **"Is this still current?"** | every recommendation and workbench run says whether it is current or historical — a newer data snapshot was promoted, or the squad was saved again — and **What changed?** shows the actual differences (players, availability, news, prices, fixtures, forecast versions) from stored data |
 | **Decision journal**: what Copilot recommended, what you decided, what happened, and how that compares with what was expected | record a decision from Home or the Workbench (follow, hold, another plan, a different captain, decide later); the decision-time evidence is frozen with it; after the gameweek your action, HOLD and the recommended plan are scored on official results — final only when FPL finalises the gameweek, never graded from one outcome |
 | **Season Review**: how the live forecasts are doing this season, judged only on final official results | the forecast served at each gameweek's decision cutoff is frozen — its file hash, data export time and promotion recorded in the database before the cutoff, and its data checked for later FPL news or results — scored against simple baselines with per-gameweek intervals — verdicts only after 8 final live gameweeks — beside the past seasons over the same weeks and, privately, your own recorded decisions; nothing is recalibrated automatically |
@@ -264,7 +265,8 @@ step), key or session errors, live-source failures, backups and restore: see
   app; invite-only accounts and FPL-ID onboarding (M1.1a); Transfer Workbench (M1.2); result
   lifecycle and "What changed?" (M1.3); decision journal with prospective outcome evaluation
   (M1.4); forecast record and Season Review with the live-season evaluation contract (M1.5);
-  transfer ladder and kept / excluded players in the Workbench (M1.7).
+  transfer ladder and kept / excluded players in the Workbench (M1.7); the Mini-League room
+  with standings, rivals' public picks and paired head-to-head outlooks (M1.8).
 * **Next:** the first formal live look after 8 final live gameweeks (GW7–14 of 2026-27), then any
   calibration change only through a shadow test on later live gameweeks.
 * **Release sprint (October 2026):** the product display name is a setting

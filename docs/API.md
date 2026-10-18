@@ -56,6 +56,12 @@ handler (ADR-0001 #3).
 | `GET /workbench/context?manager_key=` | Transfer Workbench (M1.2): the squad with purchase and selling prices, next-GW and horizon expectations, availability, bank, transfers, chips and current weak spots | |
 | `POST /workbench/evaluate` | Evaluate concrete plans (HOLD always; your transfer, engine replacements for a player, the optimiser's best plan, the transfer ladder — the best plan with exactly 1, 2, … transfers now) for one stored squad state as a job, under optional constraints (kept and excluded players); the same question on the same inputs returns the same run | `202` queued, `200` when already computed; draws from the expensive rate bucket |
 | `GET /workbench/runs?manager_key=`, `GET /workbench/runs/{id}` | A manager's recent runs; one run with its result, `stale_state` / `stale_snapshot` flags and the names it needs | owner only |
+| `GET /leagues?manager_key=` | Mini-league room (M1.8): the classic leagues this manager follows (summaries), the manager's FPL ID if imported, whether the live source is available | owner only |
+| `GET /leagues/available?manager_key=` | The classic leagues of the manager's own FPL team (squads imported with an FPL ID), with the manager's place and whether it is within the supported first 150 | one public request per FPL ID per 10 min; `503` when the live source is disabled |
+| `POST /leagues` | Follow a classic league (`league_id`, optional `entry_id` — required for a manually entered squad) and read it now as a job (`league_refresh`) | `202` queued, `200` when finished (`status` `succeeded` or `failed` with the reason); `409` beyond 5 leagues; `429` + `Retry-After` within 10 min of the last read; `503` live source disabled |
+| `GET /leagues/{league_id}?manager_key=` | Observed standings and rivals as read, the outlook, `staleness` reasons, the read cooldown; a changed squad or a newer served snapshot recomputes the outlook as a job (no new request to FPL) | owner only; `202` while a refresh runs |
+| `POST /leagues/{league_id}/refresh` | `fetch: true` reads the league again (cooldown `429`); `fetch: false` recomputes the outlook only | owner only |
+| `DELETE /leagues/{league_id}?manager_key=` | Stop following: the stored standings, rivals and outlook are deleted | owner only |
 | `GET /recommendations/{id}/changes`, `GET /workbench/runs/{id}/changes` | Result lifecycle (M1.3): why a result is no longer current and what differs between the inputs it used and the inputs served now — stored-state diff, snapshot-to-snapshot diff when the superseded snapshot is still on disk, forecast versions; honest `available: false` otherwise | owner only |
 | `POST /scenarios`, `POST /what-if`, `POST /simulate` | Scenario re-simulation of the squad; optional transfer compared with holding under each scenario | |
 | `POST /recommendations/generate` | Full decision package (stability, scenarios, chips, evidence) as a job | `202` |
@@ -226,6 +232,31 @@ the same simulation samples, net of hits: mean, p10/p50/p90, `probability_positi
 candidates were screened. Status flow: `queued` → `running` → `succeeded` | `failed`
 (`error`, retry by evaluating again); `stale_state` when the manager saved a newer squad,
 `stale_snapshot` when the data snapshot moved on — the run is never silently replaced.
+
+## Mini-league room contract (M1.8)
+
+A refresh reads the league's standings pages (50 entries each) until the manager's own entry is
+found — at most three pages, so only leagues where the manager is in the first 150 are
+supported — then, for the **rivals** (the leader and up to five entries directly above and five
+below the manager), the entry history (chips) and the picks of the latest gameweek whose
+deadline has passed (`picks_gameweek`; a Free Hit in that gameweek reverts to the squad before
+it). Picks are public only after a deadline; a rival whose picks are not published, whose
+players are unknown to the served snapshot, or who could not be read in an outage is listed
+with `unavailable` and its reason, and nothing is estimated for them.
+
+`data` holds what was read (`standings`, `me`, `rivals`, `pages`, `requests`, `fetched_at`,
+`source`). `analysis` holds what was computed on the serving forecast for the current
+gameweek: `me` (the lineup optimiser's XI and armband for the manager's current squad — the
+same as `POST /lineup`), per rival `points_gap` (their total − yours), `outlook`
+(`probability_ahead_this_gw`, `probability_level_this_gw`, `probability_ahead_after` =
+P(your gameweek points − theirs > `points_gap`), `probability_level_after`, `diff_mean`,
+`diff_p10`, `diff_p90`), `captain`, `squad`, both differential sets; `captain_vs_rivals`
+(your top captain candidates re-scored against the rivals directly `above` and `below`);
+`league` (`popular_not_mine`, `my_unique_starters`, `template_gaps` over global ownership); the
+identifiers (`state_id`, `snapshot_id`, `forecast_key`, `n_simulations`) and `assumptions`.
+Both squads are scored sample by sample on the same joint simulation; rivals are assumed to
+make no further transfer, play no chip and take no hit before the deadline; FPL's tie-breaks
+are not modelled (`*_level_*` is reported instead).
 
 ## Recommendation contract (§72.1)
 

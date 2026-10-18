@@ -415,3 +415,40 @@ test("the season review keeps the live record, past seasons and the manager's ow
   expect(text).not.toMatch(/prospective|class [HRPJ]\b/i);
   expect(text).not.toMatch(/% good|decision score|rating/i);
 });
+
+// ---------------------------------------------------------------- mini-league room (M1.8)
+test("mini-league: following a league shows observed standings apart from the modelled outlook, with the API's numbers", async ({ page }) => {
+  await page.goto("/league");
+  await expect(page.getByTestId("league-form")).toBeVisible();
+  // the e2e stack serves a synthetic league (tests/league_fake.py): 20 entries, yours 900008 at 8
+  await page.getByTestId("league-id").fill("4242");
+  await page.getByTestId("league-entry").fill("900008");
+  await page.getByTestId("follow-league").click();
+  await expect(page.getByTestId("league-state")).toHaveAttribute("data-state", "succeeded");
+  await expect(page.getByTestId("standings").locator("tbody tr")).toHaveCount(20);
+  await expect(page.getByTestId("standing-900008")).toContainText("you");
+  await expect(page.getByTestId("standings")).toContainText("observed");
+  await expect(page.getByTestId("outlook")).toContainText("modelled");
+  // parity: every probability shown is the stored outlook's
+  const key = JSON.parse((await page.evaluate(() => window.localStorage.getItem("fpl.settings.v1"))) ?? "{}").managerKey as string;
+  const v = await (await page.request.get(`/backend/leagues/4242?manager_key=${key}`)).json();
+  const rivals = v.analysis.rivals as { entry: number; outlook: { probability_ahead_after: number } | null }[];
+  expect(rivals).toHaveLength(11);
+  for (const r of rivals) {
+    expect(r.outlook).not.toBeNull();
+    await expect(page.getByTestId(`p-after-${r.entry}`)).toContainText(`${(100 * r.outlook!.probability_ahead_after).toFixed(0)}%`);
+  }
+  await expect(page.getByTestId("captain-vs").locator("tbody tr")).toHaveCount(v.analysis.captain_vs_rivals.rows.length);
+  await expect(page.getByTestId("league-assumptions")).toContainText("not guessed");
+  await expect(page.getByTestId("league-trace")).toContainText(v.analysis.forecast_key);
+  // reading FPL again is rate-limited
+  await expect(page.getByTestId("refresh-league")).toBeDisabled();
+  await expect(page.getByTestId("refresh-league")).toContainText("Read again in");
+  // an unknown league fails with its reason, and following can be stopped
+  await page.getByTestId("league-id").fill("31337");
+  await page.getByTestId("follow-league").click();
+  await expect(page.getByTestId("league-failed")).toContainText("no classic league with this ID");
+  await page.getByTestId("remove-league").click();
+  await expect(page.getByTestId("league-tab-31337")).toHaveCount(0);
+  await expect(page.getByTestId("league-tab-4242")).toBeVisible();
+});

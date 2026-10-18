@@ -13,6 +13,7 @@ from sqlalchemy import Engine
 
 from fpl_api.attestation import FplServerClock, ServerClock
 from fpl_api.copilot import AnalysisStore
+from fpl_api.league import LeagueStore
 from fpl_api.lineage import LineageStore
 from fpl_api.observability import Metrics
 from fpl_api.services import (
@@ -68,6 +69,7 @@ class AppServices:
     notifications: NotificationStore | None = None
     analyses: AnalysisStore | None = None
     workbench: WorkbenchStore | None = None
+    leagues: LeagueStore | None = None  # mini-league room (M1.8)
     metrics: Metrics = field(default_factory=Metrics)
     extras: dict[str, Any] = field(default_factory=dict)
     server_clock: ServerClock | None = None  # FPL's time for the forecast record (M1.5)
@@ -95,6 +97,7 @@ class AppServices:
             notifications=NotificationStore(engine) if engine else None,
             analyses=AnalysisStore(engine) if engine else None,
             workbench=WorkbenchStore(engine) if engine else None,
+            leagues=LeagueStore(engine) if engine else None,
             server_clock=(
                 FplServerClock.from_config(sources_config()) if settings.time_attestation else None
             ),

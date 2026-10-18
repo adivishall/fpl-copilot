@@ -194,6 +194,31 @@ Design and methodology: `docs/architecture/decision-journal.md`.
   byte-reproducible on one machine only, and a plan after an inherited club excess may be the
   best valid plan explored rather than a proven optimum (§5).
 
+## 4a-bis. Mini-league room (M1.8)
+
+* **Observed vs modelled.** Standings, ranks, totals and rivals' squads are what FPL publishes;
+  every probability is the serving forecast's joint simulation. P(above after the gameweek)
+  compares the paired difference of gameweek points with the observed gap; it is not a rank
+  projection, and overall rank is not modelled at all.
+* **Rivals' moves are unknowable before a deadline.** A rival's squad is their picks at the last
+  passed deadline: their transfers, chip and armband for the coming gameweek are not known, and
+  the outlook assumes none (no hit, no chip). Your own side is your current squad with no
+  transfer; to compare a transfer's effect on a rival, evaluate it in the Workbench (the league
+  outlook does not yet score Workbench plans against rivals).
+* **Coverage.** Only leagues where you are in the first 150 places, and at most eleven rivals
+  (the leader, five above, five below) are analysed; head-to-head classic leagues, cups and
+  leagues beyond that depth are not. A rival whose picks are missing or contain a player the
+  served snapshot does not know is shown as unavailable, never estimated.
+* **Freshness.** Standings and picks are read on request (and at most once every 10 minutes
+  per league); nothing re-reads them automatically after a deadline — the page says when a
+  deadline has passed since the last read. The outlook is recomputed automatically when your
+  squad or the served snapshot changes.
+* **Ties and live points.** FPL breaks ties by fewer transfers; that is not modelled (the level
+  probability is shown). Live in-gameweek points and provisional bonus are not read.
+* **Privacy.** The standings include other people's team and manager names as FPL publishes
+  them; they are stored only for the manager who follows the league and deleted with it (see
+  `docs/DEPLOYMENT.md` → *Privacy operations*).
+
 ## 4b. Season Review and the live record (M1.5)
 
 Contract: `docs/architecture/season-evaluation.md`.

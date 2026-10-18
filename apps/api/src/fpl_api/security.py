@@ -36,6 +36,7 @@ EXPENSIVE_PREFIXES = (
     "/api/v1/backtests",
     "/api/v1/lineup",
     "/api/v1/workbench",  # an evaluation is a job of several exact solves (M1.7 review)
+    "/api/v1/leagues",  # a league refresh drives paced requests to the FPL API (M1.8)
 )
 
 
@@ -46,6 +47,7 @@ PRIVILEGED_GET_PREFIXES = (
     "/api/v1/auth",
     "/api/v1/copilot",
     "/api/v1/workbench",
+    "/api/v1/leagues",
     "/api/v1/squad",
     "/api/v1/settings",
     "/api/v1/notifications",
@@ -61,12 +63,15 @@ def hash_key(key: str) -> str:
 
 
 _MANAGER_IN_PATH = re.compile(r"(/managers/)([^/]+)")
+_LEAGUE_IN_PATH = re.compile(r"(/leagues/)(\d+)")
 
 
 def loggable_path(path: str) -> str:
     """A request path safe to log: manager keys in the path are replaced by a short hash (the
-    same pseudonym the audit log uses), so logs never hold the identifier itself."""
-    return _MANAGER_IN_PATH.sub(lambda mt: mt.group(1) + "k:" + hash_key(mt.group(2))[:16], path)
+    same pseudonym the audit log uses), so logs never hold the identifier itself; league ids
+    (which league a user follows, M1.8) are pseudonymised the same way."""
+    path = _MANAGER_IN_PATH.sub(lambda mt: mt.group(1) + "k:" + hash_key(mt.group(2))[:16], path)
+    return _LEAGUE_IN_PATH.sub(lambda mt: mt.group(1) + "l:" + hash_key(mt.group(2))[:16], path)
 
 
 @dataclass

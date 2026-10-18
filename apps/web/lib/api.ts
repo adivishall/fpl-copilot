@@ -630,6 +630,120 @@ export interface WorkbenchRun {
   freshness: Freshness;
 }
 
+// ---------------------------------------------------------------- mini-league room (M1.8)
+export interface LeagueStanding {
+  entry: number;
+  entry_name: string;
+  player_name: string;
+  rank: number;
+  last_rank: number | null;
+  total: number;
+  event_total: number;
+}
+
+export interface LeagueOutlook {
+  rival: string;
+  points_gap: number;
+  probability_ahead_this_gw: number;
+  probability_level_this_gw: number;
+  probability_ahead_after: number;
+  probability_level_after: number;
+  diff_mean: number;
+  diff_p10: number;
+  diff_p90: number;
+}
+
+export interface LeagueRivalView extends LeagueStanding {
+  picks_gameweek: number | null;
+  chips_used: string[];
+  active_chip: string | null;
+  event_transfers: number | null;
+  event_transfers_cost: number | null;
+  unavailable: string | null;
+  note: string | null;
+  points_gap: number;
+  captain: number | null;
+  squad: number[] | null;
+  their_differentials: number[];
+  my_differentials: number[];
+  outlook: LeagueOutlook | null;
+}
+
+export interface LeagueAnalysis {
+  version: string;
+  computed_at: string;
+  state_id: string;
+  snapshot_id: string;
+  forecast_key: string;
+  season: string;
+  gameweek: number;
+  picks_gameweek: number | null;
+  n_simulations: number;
+  me: { entry: number; entry_name: string; rank: number; last_rank: number | null; total: number; event_total: number; lineup: { starters: number[]; bench: number[]; captain: number; vice_captain: number }; captain: number; expected_points: number };
+  rivals: LeagueRivalView[];
+  league: {
+    rivals: number;
+    rivals_with_squads: number;
+    popular_not_mine: { player_code: number; rivals: number }[];
+    my_unique_starters: number[];
+    template_gaps: { player_code: number; ownership: number }[];
+    template_threshold: number;
+  };
+  captain_vs_rivals: { above: string | null; below: string | null; rows: { captain: number; expected_points: number; p_ahead_after: Record<string, number> }[] };
+  assumptions: string[];
+  names: Record<string, string | null>;
+}
+
+export interface LeagueSummary {
+  manager_key: string;
+  league_id: number;
+  entry_id: number;
+  league_name: string | null;
+  status: "queued" | "running" | "succeeded" | "failed";
+  job_id: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  fetched_at: string | null;
+  computed_at: string | null;
+}
+
+export interface LeagueView extends LeagueSummary {
+  data: {
+    league_id: number;
+    league_name: string | null;
+    picks_gameweek: number | null;
+    standings: LeagueStanding[];
+    me: LeagueStanding;
+    rivals: (LeagueStanding & { unavailable: string | null })[];
+    pages: number;
+    requests: number;
+    fetched_at: string;
+    warnings: string[];
+    source: string;
+  } | null;
+  analysis: LeagueAnalysis | null;
+  staleness: { state_id: string | null; analysis_stale: boolean; data_stale: boolean; reasons: string[]; expected_picks_gameweek: number | null };
+  cooldown_seconds: number;
+  freshness: Freshness;
+}
+
+export interface LeagueList {
+  manager_key: string;
+  leagues: LeagueSummary[];
+  entry_id: number | null;
+  has_squad: boolean;
+  max_leagues: number;
+  live_source: boolean;
+}
+
+export interface AvailableLeagues {
+  entry_id: number | null;
+  leagues: { league_id: number; name: string; kind: string; entry_rank: number | null; rank_count: number | null; supported: boolean }[];
+  max_rank?: number;
+  reason?: string;
+}
+
 // ---------------------------------------------------------------- decision journal (M1.4)
 export type JournalAction = "HOLD" | "TRANSFER" | "HIT" | "CHIP" | "DEFER" | "UNKNOWN";
 export type EvaluationStatus = "pending" | "partial" | "final" | "unavailable";

@@ -1160,6 +1160,29 @@ class WorkbenchRunRow(Base):
     invalidation_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
+class ManagerLeagueRow(Base):
+    """A classic mini-league a manager follows (M1.8): the standings and the nearest rivals'
+    public picks as fetched (``data_json``) and the outlook computed on the serving forecast
+    (``analysis_json``) — one row per (manager, league), overwritten on every refresh, keyed by
+    the importing manager only (never by the rivals' FPL ids), exported and erased with the
+    manager."""
+
+    __tablename__ = "manager_leagues"
+    manager_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    league_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_id: Mapped[int] = mapped_column(Integer)  # the manager's own FPL entry in the league
+    league_name: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(16), index=True)  # queued|running|succeeded|failed
+    job_id: Mapped[str | None] = mapped_column(String(64))
+    error: Mapped[str | None] = mapped_column(Text)
+    data_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    analysis_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+    fetched_at: Mapped[datetime | None] = _ts(nullable=True)
+    computed_at: Mapped[datetime | None] = _ts(nullable=True)
+
+
 class ProductEventRow(Base):
     """First-party product analytics: named events with a small allow-listed property set, never
     credentials or manager keys (``fpl_api.analytics``). Pruned by the retention job."""

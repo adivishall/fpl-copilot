@@ -2,6 +2,32 @@
 
 User-visible behaviour changes (§78). Milestones follow `docs/BUILD_STATUS.md`.
 
+## M1.8 — Mini-League room (2026-10-19)
+
+### Added
+- **Mini-League page** (`/league`, *Plan → Mini-League*): follow up to five classic leagues by
+  ID (or pick one from your FPL team's own leagues). A refresh reads the published standings
+  and, for the leader and up to five rivals above and five below you, their public picks after
+  the last deadline (paced, one request per second, as a background job; at most once every
+  10 minutes per league). The page keeps the **observed** standings (rank, movement, gameweek
+  and total points, the gap to you) apart from the **modelled** outlook for the next gameweek:
+  per rival P(more points this gameweek), P(above them after it) given the current gap, and
+  your margin's 80 % band — both squads scored on the same simulation samples; the captaincy
+  choice against the rivals directly above and below you (protect a lead or chase); what
+  several rivals own that you do not, your starters none of them owns, and highly owned
+  players you lack. A rival whose picks are unpublished or unreadable is shown as unavailable,
+  never estimated; rivals' transfers before the deadline are not guessed, and the page says
+  so. The outlook is recomputed for a new squad or snapshot without asking FPL again.
+- API: `GET /leagues`, `GET /leagues/available`, `POST /leagues`, `GET /leagues/{id}`,
+  `POST /leagues/{id}/refresh`, `DELETE /leagues/{id}`; job kind `league_refresh`; table
+  `manager_leagues` (migration `0009`, reversible), exported and erased with the manager.
+- Library: `fpl_decision.league.standing_outlook`, `captain_vs_rivals`, `rival_ownership`.
+- Contracts: the standings payload's `league` block and bounds; the entry's classic leagues.
+
+### Changed
+- League routes are owner-only, count toward the expensive rate bucket, and league ids are
+  pseudonymised in rejected-request logs.
+
 ## M1.7 — Transfer ladder and squad constraints in the Workbench (2026-10-19)
 
 ### Added

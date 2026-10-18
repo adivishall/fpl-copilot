@@ -17,6 +17,7 @@ const NAV: [string, [string, string][]][] = [
     [
       ["/", "Overview"],
       ["/transfers", "Transfer Workbench"],
+      ["/league", "Mini-League"],
       ["/squad", "Squad Planner"],
       ["/planner", "Future Planner"],
     ],
