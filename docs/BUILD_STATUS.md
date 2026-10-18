@@ -33,8 +33,8 @@ requirement and marks partial work as PARTIAL (99 requirements: 81 COMPLETE, 15 
 V1 release work after M14 is planned and logged in `docs/V1_RELEASE_PLAN.md`; its verification
 records are §2a and §2b (final). Public deployment waits on operator inputs (host, domain,
 secrets); everything else for V1 is done. Product milestones after V1 are recorded in §2c
-(M1.1a), §2d (M1.2), §2e (M1.3), §2f (M1.4), §2g (M1.5), §2h (M1.6) and §2j (M1.7); §2i is
-the release sprint.
+(M1.1a), §2d (M1.2), §2e (M1.3), §2f (M1.4), §2g (M1.5), §2h (M1.6), §2j (M1.7) and §2k
+(M1.8); §2i is the release sprint.
 
 ## 2. M14 verification record (2026-10-04 – 06, local machine)
 
@@ -545,6 +545,53 @@ still enforced on the development platform only. Not done in this milestone: mul
 repairs from the page (the API accepts them), precomputed shortlists, the hit view as a separate
 page, and the mini-league workflow (next milestone; design notes in §7).
 
+## 2k. M1.8 — Mini-League room (2026-10-19)
+
+Scope (second milestone of the owner directive of 2026-10-18; §2j has the audit that chose
+the order): a signed-in manager follows a public classic league and sees, apart from each
+other, what FPL publishes (standings, rivals' picks after a deadline) and what the engine
+models (P(above a rival after the next gameweek) on the joint simulation, the captaincy choice
+against the nearest rivals), with missing or unreadable rival data never estimated.
+
+| Area | Result |
+|---|---|
+| Library | `fpl_decision.league`: `standing_outlook` (head-to-head with the observed points gap folded in: P(more points this GW), P(above after it) = P(paired difference > gap), P(level), the margin's mean and 80 % band), `captain_vs_rivals` (my XI re-scored per captain candidate against chosen rivals), `rival_ownership` (counts over whole known squads only). Tests: `tests/unit/decision/test_league_outlook.py` (3, on a toy simulation with exact expected probabilities) |
+| Fetching | `fpl_api.league.fetch_league` through the paced client (1 request/s): standings pages until the manager's entry is found (≤ 3 pages = first 150 places), then for the leader and up to five rivals above and five below, the entry history (chips) and the picks of the latest passed deadline (a Free Hit reverts to the squad before it); per-rival failures — picks not published, players unknown to the served snapshot, contract violations — mark that rival unavailable; an outage stops further requests. ≤ 25 requests per read. Contracts: the standings payload's `league` block and bounds; the entry's classic leagues (both validated against live payloads on 2026-10-19). Tests: `tests/unit/api/test_league_fetch.py` (7, against `tests/league_fake.py`, a synthetic client) |
+| Storage | `manager_leagues` (migration `0009`: primary key manager × league, status, standings/rivals as read, outlook, timestamps), keyed by the importing manager only — never by a rival's FPL id — exported and erased with the manager; migrations upgrade → downgrade → upgrade and no model drift: 6/6 |
+| API | `GET /leagues`, `GET /leagues/available`, `POST /leagues`, `GET /leagues/{id}`, `POST /leagues/{id}/refresh`, `DELETE /leagues/{id}`; job kind `league_refresh` (lease 10 min); at most 5 leagues per manager (`409`); one read per league per 10 minutes (`429` + `Retry-After`); `503` when the live source is disabled; a changed squad or newer served snapshot recomputes the outlook as a job without a new FPL request; owner-only routes (router dependency, `manager_key` in every job's parameters); the routes are in the privileged-GET and expensive buckets; league ids pseudonymised in rejected-request logs; error texts carry no league or entry id. Tests: `tests/integration/test_league_api.py` (8: the read and its request count, the outlook equals the library recomputed on the same forecast and lineups, the XI equals `POST /lineup`, cooldown, recompute without FPL after a squad change, an unknown league failing with its reason, the cap, input validation, the entry's own leagues with a 10-minute cache, the disabled source, cross-user `403` on list/get/available/attach/refresh/delete/job, export, erasure, nothing identifying in logs, a manager erased mid-refresh is not re-created, an outlook from another snapshot is recomputed once on the served one); `test_api.py` privileged-GET and log-pseudonymisation checks extended |
+| Web | `/league` (*Plan → Mini-League*): follow by ID or from the FPL team's own leagues; status with polling, failure reason, staleness reasons, read-again button disabled during the cooldown, stop following; **Standings (observed)** with movement, gameweek and total points and the gap to you; **Head-to-head outlook (modelled)** per rival with P(above after the gameweek) first, P(more points this gameweek), your margin's band, their captain, chips used, differentials, and unavailable rivals with the reason; **Captaincy against your nearest rivals**; **What your rivals hold**; **What this assumes** with the trace identifiers. Every value is the API's; names are rendered as text. Checked by eye at 1280 px and 390 px (tables scroll sideways like the other pages; the key probability is the first data column) |
+| Browser tests | development flow (synthetic league in the e2e stack): **the full development suite **17/17** on `53cef97` (3.0 min; the league flow follows a league by ID and FPL ID, checks 20 observed rows, the observed/modelled labels, every rival's P(above after) against the stored outlook, the captaincy rows, the assumptions and trace, the read cooldown, and an unknown league failing with its reason and being removed)**; production topology on images built from `64223cc` (engine `7da36a20a2b4`, web `35d39a936032`, `FPL_BUILD_REVISION` recorded; migration `0009` applied to the live database by the `migrate` service) with a real classic league: ****23 passed, 0 failed, 2 skipped** (the two topology tests that need the auxiliary web containers) in 2.2 min with `E2E_FPL_ENTRY_ID=1` and a 24-entry invitational classic league that entry is in: the entry's own leagues are listed, the league is read through the worker, the manager's row is marked, every rival's probability matches the stored outlook (or its unavailability is shown), the re-read is rate-limited, and the manager is erased afterwards. The same suite also passed on `53cef97` and `cb197fb` images (23/2 each)** |
+| Python tests | fast tier ****577 passed, 6 deselected** (slow and network tiers) in 9 min 4 s on the final code (new: 19)**; lint, format, mypy (126 files), import-linter 4/4, `tsc`, `next build`: clean |
+| Latency (development machine, Docker stack, `infra/scripts/league_latency.py`, a real league) | a real 24-entry league (manager 22nd: the leader, five above, the two below = 8 rivals): the read made **17 FPL requests** (1 standings page + 2 per rival) and **8 of 8** rival squads were readable; `POST /leagues` answers in 18–47 ms (`202`), the league is served **28.6 s** after the request on a settled worker and 62.1 s right after a restart (queued behind the restart's other jobs on the single worker, §2d defect 51); recomputing the outlook alone 3.7–6.6 s; `GET /leagues/{id}` p50 / p95 13–33 / 14–37 ms, `GET /leagues` 7–14 / 8–17 ms; following again within the cooldown → `429` |
+
+CI: code `53cef97` → `cb197fb` → `64223cc` (the first two runs were cancelled by the next push, as the workflow cancels in-progress runs per branch); [run 39166184237](https://github.com/adivishall/fpl-copilot/actions/runs/39166184237) on `64223cc` **success** on every job: lint, security, test, optimiser suite, web e2e (17 browser flows) and container builds. This documentation commit is checked by its own run; `develop` is fast-forwarded only after it is green.
+
+Defects found while verifying on the Docker stack, all fixed before this record: 62. Every FPL
+request URL — entry ids of managers who import their squad and, with M1.8, league and rival
+entry ids — was printed by the HTTP client's INFO logging in the worker (pre-existing since the
+live client); `configure_logging` now holds `httpx`/`httpcore` at WARNING (unit test; after the
+fix, no request URL or league id in any container log over a full production run and a probe).
+63. A job whose manager was erased while it ran raised an `AssertionError` in the worker when
+recording its own (erased) job row (pre-existing race, seen during the production suite's
+export/erase test); no data was re-created — the foreign keys of analyses and workbench runs and
+the league store's update-only writes prevent it — and the runner now logs `job_record_erased`
+and returns (integration test). 64. New in M1.8 and caught on the stack: a league job computed on
+the worker's newest export while the API served the previous snapshot, so every view judged the
+outlook stale and its repeated recompute was de-duplicated onto the finished job, leaving the
+league "failed" after 92 s; league jobs now carry the API's snapshot id and run on exactly it
+(`svc.at_snapshot`, as the workbench does) with a unique attempt id (regression test).
+
+Decisions and limitations: 58. Only the latest passed deadline's picks are public, so a rival's
+squad is that one; the outlook assumes no further transfer, chip or hit for either side and
+says so on the page. 59. P(above after the gameweek) folds the observed gap into a paired
+difference; it is not a rank projection, and FPL's tie-break on transfers is not modelled (the
+level probability is shown). 60. Coverage is bounded on purpose — the first 150 places, eleven
+rivals, five leagues, one read per 10 minutes — so a refresh stays ≤ 25 paced requests. 61.
+Other people's public team and manager names are stored only for the manager who follows the
+league, overwritten on refresh and deleted with it; they are never logged. Not done: scoring a
+Workbench plan against rivals, automatic re-reads after each deadline, head-to-head leagues,
+live in-gameweek points, a rank or ownership objective. Defects 52 and 53 are unchanged.
+
 ## 3. Environment
 
 Apple M4 (10 logical CPUs), 16 GB RAM, macOS 27.0.1; Python 3.12.15 (uv), Node 22.23, PostgreSQL
@@ -579,10 +626,9 @@ Genuinely open items, in priority order (details in the audit and limitations):
 
 1. ~~Ingest completed-gameweek results from the live API~~ — done in the V1 work (§2a).
 2. Real per-user authentication/authorisation if the system is ever exposed beyond a trusted group.
-3. Expose league analytics (head-to-head, template, differential) through the API/UI — the
-   next product milestone after M1.7 (§2j): the standings and picks clients and the
-   head-to-head library exist; a paced import job, a manager-keyed store with export and
-   erasure, overtake probabilities on the joint simulation and a page are the work.
+3. ~~Expose league analytics through the API/UI~~ — done in M1.8 (§2k). Still open on that
+   path: scoring a Workbench plan against league rivals, automatic re-reads after each
+   deadline, head-to-head leagues, a rank or ownership objective.
 4. A public deployment target (VM + TLS reverse proxy; the host script and every owner input
    are listed in §2i — the host, domain and name are still missing), the browser extension's
    release ZIP and Chrome Web Store submission (§2i), Alertmanager routing, and archival of
