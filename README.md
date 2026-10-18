@@ -19,10 +19,12 @@ manager's real squad and state, simulates outcomes jointly, optimises the whole 
 coming gameweeks, checks every plan against the rules independently, and shows the evidence,
 the downside and what happens if you do nothing.
 
-> **Status:** active development — milestone M1.6 (FPL Copilot design system) complete; the
-> first live-season evidence (the GW7 forecast checkpoint) is captured after 2026-10-17 08:30 UTC.
-> The full production topology (TLS proxy, web, API, worker, scheduler, PostgreSQL, Redis) is
-> verified **locally** with Docker Compose. **There is no public demo yet.**
+> **Status:** active development; completed milestones are listed under
+> [Status and roadmap](#status-and-roadmap). The 2026-27 season is the first one the models have
+> not seen: the GW7 forecast was frozen before its deadline (17 Oct 2026), and the first scored
+> look comes after 8 final live gameweeks (GW7–14). The full production topology (TLS proxy, web,
+> API, worker, scheduler, PostgreSQL, Redis) runs **locally** with Docker Compose.
+> **There is no public demo yet.**
 
 [![Copilot Home: the manager's situation, squad health, recommended action with its lifecycle status and captain profiles](docs/images/copilot-home.png)](docs/images/copilot-home-full.png)
 
@@ -116,8 +118,9 @@ Deeper: [optimiser](docs/architecture/optimizer.md) · [result lifecycle](docs/a
   known before each deadline. A schedule look-ahead (postponed fixtures visible early in
   archived data) was found and fixed, and the published numbers were regenerated —
   [backtest protocol](docs/BACKTEST_PROTOCOL.md).
-* **Uncertainty, not point estimates.** Distributions are evaluated with CRPS and PIT coverage;
-  pre-registered promotion gates; [model card](docs/MODEL_CARD.md).
+* **Uncertainty, not point estimates.** Distributions are evaluated with CRPS and PIT coverage
+  against promotion gates fixed before evaluation (one mis-specified interval gate was replaced
+  afterwards, and the report says so); [model card](docs/MODEL_CARD.md).
 * **Optimisation under real constraints** — budget with selling prices, club limits, free-transfer
   banking, hits, chip windows, Free Hit reversion — with an independent validator and a
   brute-force-checked MILP ([optimiser](docs/architecture/optimizer.md),
@@ -151,14 +154,17 @@ Deeper: [optimiser](docs/architecture/optimizer.md) · [result lifecycle](docs/a
 
 All figures link to the generated reports; development-machine timings come from one Apple M4.
 
-**Forecasts** — out of sample over 114 weekly cutoffs in three seasons
-([report](ml/reports/forecast_eval.md)):
+**Forecasts** — walk-forward over 114 weekly cutoffs in three seasons: each forecast uses only
+data available before its cutoff, but the model was designed while looking at these seasons, so
+this is not a held-out test; 2026-27 is ([report](ml/reports/forecast_eval.md),
+[protocol](docs/BACKTEST_PROTOCOL.md) §5):
 
 | horizon 0, all players | Monte Carlo model | best simple baseline | climatology |
 |---|---|---|---|
 | RMSE (points) | **1.924** | 2.031 (paired 95 % CI of the difference excludes 0) | 2.351 |
 | CRPS | **0.628** | — | 0.722 |
-| central 80 % interval coverage (randomised PIT) | **0.804** | — | 0.800 |
+| central 80 % interval coverage (randomised PIT) | 0.804 | — | 0.800 |
+| inclusive p10–p90 coverage (the band the app shows) | 0.938 | — | — |
 | P(start) Brier / ECE | **0.083 / 0.011** | 0.101 / 0.021 | — |
 
 **Decisions** — walk-forward backtest, 114 gameweeks, engine minus benchmark with 95 %
@@ -183,15 +189,15 @@ of other managers' scores.
 13.4 s; the MILP beats a greedy one-transfer heuristic in 94 % of states; chip-open solves always
 reach the 60 s limit and are labelled *not proven optimal*.
 
-**Tests** (current branch, development machine; [build status](docs/BUILD_STATUS.md)):
-
-| suite | result |
-|---|---|
-| Python fast tier — unit, property and integration tests on real PostgreSQL and Redis | 453 passed |
-| slow + network tiers — official points on 113,870 historical rows; rules vs the live FPL API | 6 passed |
-| browser flows, development stack (incl. a real snapshot promotion) | 13 passed |
-| browser flows, production topology on the Docker Compose stack (web proxy → API → worker; live FPL-ID import) | 22 passed |
-| ruff, mypy (116 files), import-linter (4 contracts), TypeScript, `next build` | clean |
+**Tests.** [CI](.github/workflows/ci.yml) runs on every push: ruff, mypy, import-linter contracts,
+the Python fast tier (unit, property and integration tests on a real PostgreSQL, with a 90 %
+coverage report), the MILP-vs-brute-force optimiser suite, browser flows on the development stack,
+migration round-trips, dependency and secret scans, and container builds. The Redis-backed worker
+tests skip in CI and run locally against a `redis-server`. Outside CI: the slow and network tiers
+(official points on 113,870 historical rows; rules against the live FPL API) and browser flows on
+the production topology (Docker Compose, web proxy → API → worker). Counts change with every
+milestone, so they are not repeated here: each CI run and [build status](docs/BUILD_STATUS.md)
+record them.
 
 **Open findings** (disclosed, not hidden):
 * *Cross-machine reproducibility* — the engine reproduces itself byte-for-byte on one machine,
