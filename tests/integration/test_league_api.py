@@ -315,3 +315,44 @@ def test_a_manager_erased_while_its_league_refresh_runs_is_not_recreated(
             .where(m.JobRow.request_json["manager_key"].astext == key)
         )
     assert left == 0  # the job's record went with the manager; the runner did not fail on it
+
+
+def test_an_outlook_from_another_snapshot_is_recomputed_once_on_the_served_one(
+    client: TestClient, squad: list[int], fake: FakeFplClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression (found on the Docker stack): the worker had loaded a newer export than the API
+    served, the outlook carried that snapshot, every view judged it stale, and a repeated
+    recompute was de-duplicated onto the finished job, leaving the league 'failed'. Jobs now
+    compute on the snapshot the API names, and each refresh is its own job."""
+    from sqlalchemy import update
+
+    from fpl_storage import models as m
+    from fpl_storage.db import session_scope
+
+    svc = client.app.state.services  # type: ignore[attr-defined]
+    served = svc.data.snapshot_id
+    pinned: list[str] = []
+    real = svc.at_snapshot
+
+    def spy(snapshot_id: str) -> Any:
+        pinned.append(snapshot_id)
+        return real(snapshot_id)
+
+    monkeypatch.setattr(svc, "at_snapshot", spy)
+    row = svc.leagues.get(KEY, LEAGUE_ID)
+    stale = {**row["analysis"], "snapshot_id": "snap_newer_export_on_the_worker"}
+    with session_scope(svc.engine) as s:
+        s.execute(
+            update(m.ManagerLeagueRow)
+            .where(m.ManagerLeagueRow.manager_key == KEY)
+            .values(analysis_json=stale)
+        )
+    first = client.get(f"/api/v1/leagues/{LEAGUE_ID}", params={"manager_key": KEY}).json()
+    assert pinned == [served]  # the recompute ran on the API's snapshot
+    assert first["status"] == "succeeded" and first["analysis"]["snapshot_id"] == served
+    assert first["staleness"]["reasons"] == []
+    for _ in range(3):  # further views neither recompute nor fail
+        again = client.get(f"/api/v1/leagues/{LEAGUE_ID}", params={"manager_key": KEY}).json()
+        assert again["status"] == "succeeded"
+        assert again["analysis"]["computed_at"] == first["analysis"]["computed_at"]
+    assert pinned == [served]

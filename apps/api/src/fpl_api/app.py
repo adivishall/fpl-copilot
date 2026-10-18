@@ -447,11 +447,20 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             "freshness": fresh(),
         }
 
-    def submit_league_job(manager_key: str, league_id: int, fetch: bool, tag: str) -> str:
+    def submit_league_job(manager_key: str, league_id: int, fetch: bool) -> str:
+        """One job per refresh, never de-duplicated onto an earlier one (a finished job would
+        leave the row queued), computing on exactly the snapshot this API serves — a worker
+        may already have loaded a newer export (M1.3)."""
         assert svc.leagues is not None
         job = jobs.submit(
             "league_refresh",
-            {"manager_key": manager_key, "league_id": league_id, "fetch": fetch, "tag": tag},
+            {
+                "manager_key": manager_key,
+                "league_id": league_id,
+                "fetch": fetch,
+                "snapshot_id": svc.data.snapshot_id,
+                "attempt": uuid.uuid4().hex[:12],
+            },
         )
         svc.leagues.set_job(manager_key, league_id, job)
         return job
@@ -567,7 +576,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
                     headers={"Retry-After": str(int(wait.total_seconds()) + 1)},
                 )
         svc.leagues.queue(body.manager_key, body.league_id, entry_id)
-        submit_league_job(body.manager_key, body.league_id, True, uuid.uuid4().hex[:12])
+        submit_league_job(body.manager_key, body.league_id, True)
         return league_response(body.manager_key, body.league_id)
 
     @r.get("/leagues/{league_id}")
@@ -589,12 +598,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             st = league_staleness(row, manager_key)
             if (st["analysis_stale"] or row.get("analysis") is None) and st["state_id"]:
                 svc.leagues.queue(manager_key, league_id, int(row["entry_id"]))
-                submit_league_job(
-                    manager_key,
-                    league_id,
-                    False,
-                    f"{st['state_id']}|{row.get('fetched_at')}",
-                )
+                submit_league_job(manager_key, league_id, False)
         return league_response(manager_key, league_id)
 
     @r.post("/leagues/{league_id}/refresh")
@@ -622,7 +626,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
         elif not row.get("data"):
             raise HTTPException(409, "nothing to recompute: this league has not been read yet")
         svc.leagues.queue(body.manager_key, league_id, int(row["entry_id"]))
-        submit_league_job(body.manager_key, league_id, body.fetch, uuid.uuid4().hex[:12])
+        submit_league_job(body.manager_key, league_id, body.fetch)
         return league_response(body.manager_key, league_id)
 
     @r.delete("/leagues/{league_id}")

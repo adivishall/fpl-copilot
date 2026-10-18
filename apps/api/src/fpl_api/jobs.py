@@ -238,7 +238,11 @@ def _job_league(svc: AppServices, p: dict[str, Any]) -> str:
     the manager's current squad on the serving forecast."""
     if svc.leagues is None or svc.states is None:
         raise RuntimeError("database required")
-    return refresh_league(svc, p["manager_key"], int(p["league_id"]), bool(p.get("fetch", True)))
+    # exactly the snapshot the API serves when the refresh was asked for: a worker may have
+    # loaded a newer export the API has not promoted, and an outlook computed on it would be
+    # judged stale at once
+    target = svc.at_snapshot(p["snapshot_id"]) if p.get("snapshot_id") else svc
+    return refresh_league(target, p["manager_key"], int(p["league_id"]), bool(p.get("fetch", True)))
 
 
 def _job_journal(svc: AppServices, p: dict[str, Any]) -> str:
