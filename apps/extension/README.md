@@ -71,7 +71,11 @@ is all the user sees.
 ## Release without the Chrome Web Store (GitHub Release)
 
 Store publication needs a paid developer registration. At zero cost the ZIP is published as a
-GitHub Release asset and installed with *Load unpacked* (unzip first):
+GitHub Release asset and installed with *Load unpacked* (unzip first). `tools/release.sh --url
+https://<site> --name "<product name>"` does all of it: build, both test suites, a check that the
+ZIP holds exactly the extension's files and no credential-like text, the store images, and the
+release `extension-v<version>` with the ZIP, its checksum and the installation notes
+(`--dry-run` stops before publishing). By hand:
 
 ```bash
 cd apps/extension
