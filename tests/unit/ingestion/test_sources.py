@@ -103,3 +103,15 @@ def test_schema_rejects_malformed_payload() -> None:
     data["elements"][0]["now_cost"] = 9999
     with pytest.raises(ValueError, match="now_cost"):
         s.BootstrapStatic.model_validate(data)
+
+
+def test_http_client_request_lines_stay_out_of_the_logs() -> None:
+    """FPL request URLs carry entry and league ids: the HTTP client's per-request INFO lines are
+    silenced when the worker or CLI configures logging (its warnings still show)."""
+    import logging
+
+    from fpl_ingestion.logs import QUIET_LOGGERS, configure_logging
+
+    configure_logging("INFO")
+    for name in QUIET_LOGGERS:
+        assert logging.getLogger(name).getEffectiveLevel() == logging.WARNING

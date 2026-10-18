@@ -275,3 +275,43 @@ def test_leagues_belong_to_their_owner_are_exported_erased_and_kept_out_of_logs(
     assert (
         client.get(f"/api/v1/leagues/{LEAGUE_ID}", params={"manager_key": a_key}).status_code == 404
     )
+
+
+def test_a_manager_erased_while_its_league_refresh_runs_is_not_recreated(
+    client: TestClient, squad: list[int], fake: FakeFplClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Erasure can land while a job runs: the refresh then writes nothing back (no league row
+    for an erased manager), and the job runner finishes quietly although the job's own record
+    went with the manager."""
+    import fpl_api.league as league_mod
+    from fpl_api.privacy import delete_manager
+
+    svc = client.app.state.services  # type: ignore[attr-defined]
+    key = "lg-erased"
+    st = svc.states.latest(KEY)[1]
+    svc.states.save(key, st, "manual")
+    real = league_mod.fetch_league
+
+    def erase_midway(*a: Any, **kw: Any) -> Any:
+        got = real(*a, **kw)
+        delete_manager(svc.engine, key)  # the manager is erased while the job is reading
+        return got
+
+    monkeypatch.setattr(league_mod, "fetch_league", erase_midway)
+    r = client.post(
+        "/api/v1/leagues", json={"manager_key": key, "league_id": LEAGUE_ID, "entry_id": MY_ENTRY}
+    )
+    assert r.status_code == 404  # the refresh finished; its league row is gone with the manager
+    assert svc.leagues.get(key, LEAGUE_ID) is None and svc.leagues.for_manager(key) == []
+    from sqlalchemy import func, select
+
+    from fpl_storage import models as m
+    from fpl_storage.db import session_scope
+
+    with session_scope(svc.engine) as s:
+        left = s.scalar(
+            select(func.count())
+            .select_from(m.JobRow)
+            .where(m.JobRow.request_json["manager_key"].astext == key)
+        )
+    assert left == 0  # the job's record went with the manager; the runner did not fail on it

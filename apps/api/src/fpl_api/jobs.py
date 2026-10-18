@@ -489,7 +489,11 @@ def execute(svc: AppServices, job_id: str) -> None:
         svc.metrics.job_failures.labels(kind, "error").inc()
     with session_scope(svc.engine) as s:
         r = s.get(m.JobRow, job_id)
-        assert r is not None
+        if r is None:
+            # the manager was erased while the job ran (its job rows go with it): there is
+            # nothing to record, and the job's own stores never re-create an erased row
+            log.info("job_record_erased", job_id=job_id, kind=kind, status=status)
+            return
         r.status, r.result_ref, r.error = status, ref, error
         r.finished_at, r.progress = datetime.now(UTC), 1.0
     if kind == "recommendation" and status == "succeeded" and ref and svc.recs is not None:

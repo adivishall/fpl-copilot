@@ -7,9 +7,15 @@ import sys
 
 import structlog
 
+# HTTP client libraries log every request URL at INFO; FPL URLs carry entry (manager) and
+# league ids, which must not reach logs (M1.8 review). Their warnings and errors still do.
+QUIET_LOGGERS = ("httpx", "httpcore")
+
 
 def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
     logging.basicConfig(stream=sys.stderr, level=level, format="%(message)s")
+    for name in QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(max(logging.WARNING, logging.getLevelName(level)))
     renderer = (
         structlog.processors.JSONRenderer() if json_output else structlog.dev.ConsoleRenderer()
     )
