@@ -47,12 +47,53 @@ test("transfer workbench compares legal whole-squad plans against holding", asyn
   const label = (await rep.getAttribute("data-testid"))!.replace("plan-", "");
   await page.getByTestId(`details-${label}`).click();
   await expect(page.getByTestId("plan-details")).toContainText("Squad after");
+  // the transfer ladder (M1.7): one rung per exact transfer count, on the same run, and the
+  // numbers shown are the run's own (parity with the API's stored result)
+  const ladder = page.getByTestId("ladder");
+  await expect(ladder).toBeVisible();
+  await expect(page.getByTestId("ladder-rung-0")).toContainText("hold");
+  await expect(page.getByTestId("ladder-rung-1")).toContainText("TRANSFER");
+  const runId = (await page.getByTestId("run-status").textContent())!.match(/Run (\S+)/)![1];
+  const stored = await (await page.request.get(`/backend/workbench/runs/${runId}`)).json();
+  const rungs = (stored.result.result.plans as { kind: string; rung: number | null; transfers_now: number; gain_horizon: { mean: number }; valid: boolean }[]).filter((p) => p.kind === "ladder");
+  expect(rungs.length).toBeGreaterThanOrEqual(2);
+  for (const r of rungs) {
+    expect(r.transfers_now).toBe(r.rung);
+    expect(r.valid).toBe(true);
+    const shown = (await page.getByTestId(`ladder-net-${r.rung}`).textContent())!.trim();
+    expect(shown).toBe(`${r.gain_horizon.mean >= 0 ? "+" : ""}${r.gain_horizon.mean.toFixed(2)}`);
+  }
+  await page.getByTestId("ladder-details-1").click();
+  await expect(page.getByTestId("plan-details")).toContainText("exactly 1 transfer now");
+  // a kept player is never sold in any plan of a new evaluation, and the run says so
+  const keep = page.locator("[data-testid^='lock-']").first();
+  const keepCode = Number((await keep.getAttribute("data-testid"))!.replace("lock-", ""));
+  await keep.click();
+  await expect(keep).toHaveText("Kept");
+  await expect(page.getByTestId("wb-preferences")).toContainText("1 kept");
+  await page.getByTestId("include-best").uncheck();
+  await page.getByTestId("evaluate").click();
+  await expect(page.getByTestId("plan-ladder-1")).toBeVisible({ timeout: 240_000 });
+  await expect(ladder).toContainText("Constraints: kept");
+  await expect(page.getByTestId("wb-assumptions")).toContainText("preferences apply");
+  const runId2 = (await page.getByTestId("run-status").textContent())!.match(/Run (\S+)/)![1];
+  expect(runId2).not.toBe(runId);
+  const stored2 = await (await page.request.get(`/backend/workbench/runs/${runId2}`)).json();
+  expect(stored2.request.preferences).toEqual({ locked: [keepCode], banned: [] });
+  for (const p of stored2.result.result.plans as { sells: number[]; squad_after: number[] }[]) {
+    expect(p.sells).not.toContain(keepCode);
+    expect(p.squad_after).toContain(keepCode);
+  }
+  await keep.click(); // release the lock again for the exact-transfer check below
+  await expect(keep).toHaveText("Keep");
+  await first.click(); // keeping the selected player had cleared the sale
+  await expect(page.getByTestId("out-name")).toBeVisible();
   // a specific replacement through the picker is evaluated as an exact single transfer
   await page.getByTestId("mode-transfer").check();
   await page.getByTestId("wb-picker").getByTestId("picker-search").fill("a");
   await page.getByTestId("wb-picker").locator("[role=option]").first().click();
   await expect(page.getByTestId("incoming")).not.toContainText("pick a player");
-  await page.getByTestId("include-best").uncheck();
+  await page.getByTestId("include-ladder").uncheck();
   await page.getByTestId("evaluate").click();
   await expect(page.getByTestId("plan-your transfer")).toBeVisible({ timeout: 240_000 });
   await expect(page.getByTestId("plan-your transfer")).toContainText("TRANSFER");

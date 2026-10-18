@@ -2,6 +2,31 @@
 
 User-visible behaviour changes (§78). Milestones follow `docs/BUILD_STATUS.md`.
 
+## M1.7 — Transfer ladder and squad constraints in the Workbench (2026-10-19)
+
+### Added
+- **Transfer ladder** on the Transfer Workbench: one evaluation now also answers "no move,
+  one, two or three transfers?" — for each rung the optimiser's best plan with *exactly* that
+  many transfers now (later gameweeks re-optimised), validated by the independent rules
+  replay, scored on the same simulation samples as holding (net and gross gain, p10/p90,
+  P(better than holding)), with the hit a rung pays, the bank and free transfers after it,
+  and the solver's optimality status. A rung that would need a hit is listed as not evaluated
+  when hits are not allowed. `PlanSpec.kind = "ladder"` (`max_transfers` ≤ 4 rungs; default:
+  every free transfer plus one at a hit, at most three).
+- **Players you keep or exclude** (`preferences.locked` / `preferences.banned` on
+  `POST /workbench/evaluate`; *Keep* buttons and an *Exclude a player* picker on the page):
+  kept players stay in every plan of the run for the whole horizon, excluded players are never
+  bought nor shortlisted; a request that contradicts them is refused with the rule rather than
+  solved around. The constraints are part of the question (a different run) and are echoed in
+  the result.
+- Optimiser: `Preferences.first_gw_min_transfers` (a lower bound on first-gameweek transfers,
+  the ladder's "exactly k" together with the existing cap); off by default, absent from problem
+  identifiers until set, so existing problems, plans and the golden package are unchanged.
+
+### Changed
+- `POST /workbench/evaluate` draws from the expensive rate bucket (12 per minute per client by
+  default), like the other solver-backed endpoints.
+
 ## Release sprint — public deployment path, browser extension, configurable name (2026-10-16)
 
 ### Added

@@ -394,6 +394,8 @@ def build_and_solve(
     n_expr = [{int(y[p, t]): 1.0 for p in range(n_pl)} for t in range(n_gw)]
     if pref.first_gw_max_transfers is not None:
         m.row(n_expr[0], -INF, float(pref.first_gw_max_transfers))
+    if pref.first_gw_min_transfers is not None:
+        m.row(n_expr[0], float(pref.first_gw_min_transfers), INF)
     made = [st.transfers_made if t == 0 else 0 for t in range(n_gw)]
     f = [m.var("f[0]", float(st.free_transfers), float(st.free_transfers), integer=True)]
     for t in range(1, n_gw + 1):

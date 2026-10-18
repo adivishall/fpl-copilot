@@ -11,7 +11,16 @@ separated from its gross gain. Plan kinds:
 * ``replace`` — the replacement engine's shortlist for one outgoing player (screened over every
   affordable, club-legal candidate), each evaluated as an exact single transfer;
 * ``best`` — the optimiser's best plan plus distinct alternatives, optionally capped in
-  first-gameweek transfers or forbidden to take hits anywhere in the plan.
+  first-gameweek transfers or forbidden to take hits anywhere in the plan;
+* ``ladder`` (M1.7) — one rung per transfer count: the best plan with *exactly* k transfers now
+  for k = 1 … ``max_transfers`` (``Preferences.first_gw_min_transfers`` with the cap), so the
+  manager sees what a first, a second and a third move (free or at a hit) would each buy against
+  holding, on the same samples; a rung that would need a hit is listed under ``excluded`` when
+  hits are not allowed, never solved around.
+
+Manager constraints apply to every plan of a run through ``OptimizationProblem.preferences``:
+``locked`` players are kept all horizon (an exact transfer selling one is rejected) and
+``banned`` players are never bought nor shortlisted.
 
 Nothing here changes a forecast, a simulation or an optimiser constraint: the pieces are the
 recommendation engine's MILP, independent validator, paired comparison and option summary.
@@ -24,12 +33,14 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fpl_decision.engine import GainSummary, PlanStep, summarise_option
 from fpl_decision.paired import plan_samples
 from fpl_decision.replacement import shortlist_replacements
+from fpl_domain.rules import Ruleset
 from fpl_domain.squad import SquadPick, club_allowance, squad_violations
+from fpl_domain.state import ManagerState
 from fpl_forecasting.pipeline import Forecast
 from fpl_optimizer.alternatives import PlanOption, hold_problem, solve_with_alternatives
 from fpl_optimizer.milp import OptimizationError, Solution, build_and_solve
@@ -39,14 +50,18 @@ from fpl_optimizer.problem import OptimizationProblem
 from fpl_optimizer.validate import ValidationResult, validate_solution
 
 WORKBENCH_VERSION = "workbench-1"
-Kind = Literal["hold", "transfer", "replace", "best"]
+Kind = Literal["hold", "transfer", "replace", "best", "ladder"]
 Requester = Literal["manager", "engine"]
+LADDER_MAX_RUNGS = 4  # exact solves per ladder; the request as a whole stays bounded
+LADDER_DEFAULT_RUNGS = 3  # every free rung plus one at a hit, up to this many
 
 
 class PlanSpec(BaseModel):
     """What to evaluate. ``transfer`` names the exact moves; ``replace`` asks the engine for
     ``candidates`` replacements of ``out_player``; ``best`` asks the optimiser for its best plan
-    and ``alternatives`` distinct ones, with optional limits on transfers now and on hits."""
+    and ``alternatives`` distinct ones, with optional limits on transfers now and on hits;
+    ``ladder`` asks for the best plan with exactly 1 … ``max_transfers`` transfers now (default:
+    every free transfer plus one at a hit, at most ``LADDER_DEFAULT_RUNGS``)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -59,6 +74,12 @@ class PlanSpec(BaseModel):
     max_transfers: int | None = Field(None, ge=1, le=15)
     allow_hits: bool = True
     alternatives: int = Field(0, ge=0, le=4)
+
+    @model_validator(mode="after")
+    def _ladder_bounds(self) -> PlanSpec:
+        if self.kind == "ladder" and (self.max_transfers or 0) > LADDER_MAX_RUNGS:
+            raise ValueError(f"a ladder has at most {LADDER_MAX_RUNGS} rungs (max_transfers)")
+        return self
 
 
 class PlayerMove(BaseModel):
@@ -80,6 +101,7 @@ class PlanEvaluation(BaseModel):
     kind: Kind
     requested_by: Requester
     reason: str  # what was asked, or why the engine shortlisted it
+    rung: int | None = None  # ladder plans: the exact number of transfers now that was asked
     action: str  # HOLD | TRANSFER | HIT | CHIP
     sells: list[int]
     buys: list[int]
@@ -134,8 +156,9 @@ class _Request:
     sells: tuple[int, ...] = ()
     buys: tuple[int, ...] = ()
     issues: tuple[str, ...] = ()  # non-empty: rejected before solving
-    spec: PlanSpec | None = None  # ``best`` requests keep their limits
+    spec: PlanSpec | None = None  # ``best`` and ``ladder`` requests keep their limits
     problem: OptimizationProblem | None = None
+    rung: int | None = None  # ``ladder``: exactly this many transfers now
 
 
 def _solve(p: OptimizationProblem) -> Solution | str:
@@ -157,6 +180,7 @@ def check_moves(
     issues += [f"{c} is already in the squad" for c in buys if c in owned]
     issues += [f"{c}: no forecast on this snapshot" for c in (*sells, *buys) if c not in idx]
     issues += [f"{c} is excluded by your preferences" for c in buys if c in prob.preferences.banned]
+    issues += [f"{c} is locked by your preferences" for c in sells if c in prob.preferences.locked]
     if len(sells) != len(buys):
         issues.append(
             f"{len(sells)} out but {len(buys)} in: the squad must stay at {rs.squad.size}"
@@ -228,6 +252,9 @@ def _requests(
             if o is None or o not in st.codes:
                 excluded.append({"label": label, "reason": f"{o} is not in the squad"})
                 continue
+            if o in prob.preferences.locked:
+                excluded.append({"label": label, "reason": f"{o} is locked by your preferences"})
+                continue
             try:
                 sl = shortlist_replacements(prob, o, summary, n_screen=max(spec.candidates, 4))
             except OptimizationError as exc:
@@ -241,6 +268,8 @@ def _requests(
             for k, (c, why) in enumerate(picks, start=1):
                 must.add(c)
                 out.append(_Request(f"{label}-{k}", "replace", "engine", why, (o,), (c,)))
+        elif spec.kind == "ladder":
+            out.extend(_ladder_requests(prob, spec, label, excluded))
         else:
             why = "optimiser's best plan"
             if spec.max_transfers:
@@ -249,6 +278,40 @@ def _requests(
                 why += " (no hits)"
             out.append(_Request(label, "best", "engine", why, spec=spec))
     return out, must
+
+
+def hits_now_for(st: ManagerState, transfers_now: int, ruleset: Ruleset) -> int:
+    """Points a plan pays in the first gameweek for ``transfers_now`` transfers, from the state's
+    free transfers and the transfers already made (the MILP's own accounting, without chips)."""
+    paid = max(0, transfers_now + st.transfers_made - st.free_transfers)
+    return paid * ruleset.transfers.hit_cost
+
+
+def _ladder_requests(
+    prob: OptimizationProblem, spec: PlanSpec, label: str, excluded: list[dict[str, Any]]
+) -> list[_Request]:
+    """One request per rung: the best plan with exactly k transfers now. A rung that would cost
+    a hit is excluded, with the cost it would pay, when the spec forbids hits."""
+    st, rs = prob.state, prob.ruleset
+    free_left = max(0, st.free_transfers - st.transfers_made)
+    top = spec.max_transfers or min(LADDER_DEFAULT_RUNGS, max(1, free_left + 1))
+    out: list[_Request] = []
+    for k in range(1, top + 1):
+        hit = hits_now_for(st, k, rs)
+        why = f"best plan with exactly {k} transfer{'s' if k > 1 else ''} now"
+        why += f" ({hit}-point hit)" if hit else " (free)"
+        if hit and not spec.allow_hits:
+            excluded.append(
+                {
+                    "label": f"{label}-{k}",
+                    "reason": f"{k} transfers now would cost a {hit}-point hit; hits are not "
+                    "allowed in this ladder",
+                    "rung": k,
+                }
+            )
+            continue
+        out.append(_Request(f"{label}-{k}", "ladder", "engine", why, spec=spec, rung=k))
+    return out
 
 
 def _best_options(
@@ -320,6 +383,22 @@ def evaluate_plans(
             ),
         )
         exact_problems.append(r.problem)
+    # ladder rungs are independent single solves too: exactly k transfers now, the rest free
+    for r in requests:
+        if r.kind == "ladder":
+            assert r.spec is not None and r.rung is not None
+            r.problem = replace(
+                base,
+                preferences=replace(
+                    base.preferences,
+                    hold_first_gw=False,
+                    first_gw_max_transfers=r.rung,
+                    first_gw_min_transfers=r.rung,
+                    max_hits_total=None if r.spec.allow_hits else 0,
+                ),
+            )
+            exact.append(r)
+            exact_problems.append(r.problem)
     hold_prob = hold_problem(base)
     t1 = time.perf_counter()
     hold_r, *solved = map_ordered(_solve, [hold_prob, *exact_problems], workers)
@@ -340,6 +419,7 @@ def evaluate_plans(
                     "reason": f"no legal plan: {sol}",
                     "sells": list(r.sells),
                     "buys": list(r.buys),
+                    **({"rung": r.rung} if r.rung is not None else {}),
                 }
             )
             continue
@@ -383,6 +463,7 @@ def evaluate_plans(
                 kind=r.kind,
                 requested_by=r.requested_by,
                 reason=r.reason,
+                rung=r.rung,
                 action=summ.action,
                 sells=summ.sells,
                 buys=summ.buys,
@@ -451,6 +532,22 @@ def evaluate_plans(
             "half-profit rule from your purchase prices",
             "later gameweeks of every plan are re-optimised; only the first gameweek is "
             "a commitment",
+            *(
+                [
+                    "ladder rungs are the best plan with exactly k transfers now; a rung's hit "
+                    "follows from your free transfers (no chip is played)"
+                ]
+                if any(p.kind == "ladder" for p in plans)
+                else []
+            ),
+            *(
+                [
+                    "your preferences apply to every plan: locked players are kept all horizon, "
+                    "excluded players are never bought"
+                ]
+                if (base.preferences.locked or base.preferences.banned)
+                else []
+            ),
         ],
         config_ref=cfg.config_ref or cfg.profile,
         ruleset_version=rs.ruleset_version,

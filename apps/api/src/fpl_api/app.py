@@ -476,6 +476,16 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             "horizon": h,
             "profile": body.profile,
         }
+        if body.preferences and (body.preferences.locked or body.preferences.banned):
+            st = svc.states.get(sid, body.manager_key)
+            owned = set(st.codes) if st is not None else set()
+            foreign = sorted(set(body.preferences.locked) - owned)
+            if foreign:
+                raise HTTPException(422, f"locked players must be in the squad: {foreign} are not")
+            request["preferences"] = {
+                "locked": sorted(set(body.preferences.locked)),
+                "banned": sorted(set(body.preferences.banned)),
+            }
         run, compute = svc.workbench.create(
             body.manager_key,
             sid,

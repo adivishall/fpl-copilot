@@ -35,6 +35,7 @@ EXPENSIVE_PREFIXES = (
     "/api/v1/simulate",
     "/api/v1/backtests",
     "/api/v1/lineup",
+    "/api/v1/workbench",  # an evaluation is a job of several exact solves (M1.7 review)
 )
 
 

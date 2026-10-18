@@ -62,7 +62,10 @@ Index sets: players `p ∈ P` (candidate pool), horizon gameweeks `t = 0 … T�
 * Chips: each instance at most once (exactly once at a forced GW), at most one chip per GW
   (ruleset), only inside its window and only if still available.
 * Preferences: locked `x = 1`, banned `y = q = 0`, forced first-GW sells/buys, max transfers per
-  GW, HOLD (`y[·,0] = z[·,0] = 0`), max total hits.
+  GW, HOLD (`y[·,0] = z[·,0] = 0`), max total hits; first-GW bounds for the Transfer Workbench —
+  exactly the forced moves (`first_gw_exact`), at most `first_gw_max_transfers` and, for a
+  transfer-ladder rung (M1.7), at least `first_gw_min_transfers` buys now (`Σ_p y[p,0] ≥ k`),
+  so min = max = k means exactly k transfers in the first gameweek.
 
 **Objective (§61.3, configurable)** with `a = ev − λ_risk·(ev − q10)` and discount δ:
 

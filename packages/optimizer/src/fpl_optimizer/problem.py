@@ -164,6 +164,9 @@ class Preferences:
     # cap how many transfers the optimiser may make now (later GWs are unconstrained).
     first_gw_exact: bool = False
     first_gw_max_transfers: int | None = None
+    # Transfer ladder (M1.7): at least this many transfers now, so that together with
+    # ``first_gw_max_transfers`` a rung means *exactly* k transfers in the first gameweek.
+    first_gw_min_transfers: int | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +217,11 @@ class OptimizationProblem:
                 **(
                     {"first_gw_max_transfers": self.preferences.first_gw_max_transfers}
                     if self.preferences.first_gw_max_transfers is not None
+                    else {}
+                ),
+                **(
+                    {"first_gw_min_transfers": self.preferences.first_gw_min_transfers}
+                    if self.preferences.first_gw_min_transfers is not None
                     else {}
                 ),
             },

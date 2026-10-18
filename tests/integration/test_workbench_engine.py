@@ -5,6 +5,7 @@ hold, and the workbench's HOLD is the recommendation engine's HOLD."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,12 +13,12 @@ import pytest
 from fpl_api.container import AppServices, build_recommendation
 from fpl_api.settings import Settings
 from fpl_api.workbench import workbench_problem
-from fpl_decision.workbench import PlanSpec, evaluate_plans
+from fpl_decision.workbench import PlanSpec, evaluate_plans, hits_now_for
 from fpl_domain.enums import Position
 from fpl_domain.squad import SquadPick
 from fpl_domain.state import ManagerState, initial_chips
 from fpl_optimizer.milp import build_and_solve
-from fpl_optimizer.problem import OptimizationProblem, load_optimizer_config
+from fpl_optimizer.problem import OptimizationProblem, Preferences, load_optimizer_config
 from tests.fixtures_util import fixture_dataset
 
 
@@ -236,3 +237,81 @@ def test_workbench_hold_is_the_engines_hold(world: dict) -> None:  # type: ignor
         s.expected_points for s in pkg.hold.timeline
     ]
     assert hold.squad_after == sorted(st.codes)
+
+
+def test_ladder_rungs_are_exactly_k_transfers_valid_paired_and_bounded_by_best(
+    world: dict,  # type: ignore[type-arg]
+) -> None:
+    """Transfer ladder (M1.7): one rung per transfer count, each the best plan with exactly k
+    moves now, validated, scored on HOLD's samples with its hit separated; no rung beats the
+    unconstrained best plan, and the rung at the best plan's own count is that plan."""
+    prob, fc, st = world["prob"], world["fc"], world["state"]
+    assert st.free_transfers == 1 and st.transfers_made == 0
+    res = evaluate_plans(
+        prob,
+        fc,
+        [
+            PlanSpec(kind="ladder", label="ladder", max_transfers=2),
+            PlanSpec(kind="best", label="best"),
+        ],
+    )
+    rungs = sorted((p for p in res.plans if p.kind == "ladder"), key=lambda p: p.rung or 0)
+    assert [p.label for p in rungs] == ["ladder-1", "ladder-2"]
+    assert [p.rung for p in rungs] == [1, 2]
+    hit = prob.ruleset.transfers.hit_cost
+    for p in rungs:
+        assert p.requested_by == "engine" and "exactly" in p.reason
+        assert p.transfers_now == p.rung and len(p.sells) == p.rung and len(p.buys) == p.rung
+        assert p.valid, (p.label, p.issues)
+        assert p.hit_now == hits_now_for(st, p.rung or 0, prob.ruleset)
+        assert abs(p.gross_gain_horizon - (p.gain_horizon.mean + p.hit_cost_vs_hold)) < 1e-9
+        assert p.gain_horizon.p10 <= p.gain_horizon.p50 <= p.gain_horizon.p90
+    assert rungs[0].hit_now == 0 and rungs[0].action == "TRANSFER"
+    assert rungs[1].hit_now == hit and rungs[1].action == "HIT"
+    best = next(p for p in res.plans if p.label == "best")
+    assert max(r.objective_gain_vs_hold for r in rungs) <= best.objective_gain_vs_hold + 1e-6
+    if 1 <= best.transfers_now <= 2:
+        same = rungs[best.transfers_now - 1]
+        assert same.objective_gain_vs_hold == pytest.approx(best.objective_gain_vs_hold, abs=1e-6)
+    assert any("exactly k transfers" in a for a in res.assumptions)
+    # hits forbidden: the rung that needs one is excluded with its cost, never solved around
+    res2 = evaluate_plans(
+        prob, fc, [PlanSpec(kind="ladder", label="nohit", max_transfers=2, allow_hits=False)]
+    )
+    assert [p.label for p in res2.plans if p.kind == "ladder"] == ["nohit-1"]
+    (ex,) = res2.excluded
+    assert ex["label"] == "nohit-2" and ex["rung"] == 2 and f"{hit}-point hit" in ex["reason"]
+    # default rungs: every free transfer plus one at a hit
+    res3 = evaluate_plans(prob, fc, [PlanSpec(kind="ladder")])
+    assert sorted(p.rung or 0 for p in res3.plans if p.kind == "ladder") == [1, 2]
+
+
+def test_preferences_lock_and_exclude_players_in_every_plan(world: dict) -> None:  # type: ignore[type-arg]
+    """Manager constraints (M1.7) hold for HOLD, exact transfers, shortlists and ladder rungs
+    alike: a locked player is never sold in any gameweek, an excluded player never bought, and
+    a request that contradicts them is refused with the rule rather than solved around."""
+    prob, fc = world["prob"], world["fc"]
+    out, inc = _swap(prob)
+    constrained = replace(
+        prob, preferences=Preferences(locked=frozenset({out}), banned=frozenset({inc}))
+    )
+    res = evaluate_plans(
+        constrained,
+        fc,
+        [
+            PlanSpec(kind="transfer", label="mine", sells=[out], buys=[inc]),
+            PlanSpec(kind="replace", label="rep", out_player=out, candidates=2),
+            PlanSpec(kind="ladder", label="ladder", max_transfers=2),
+            PlanSpec(kind="best", label="best"),
+        ],
+    )
+    reasons = {e["label"]: e["reason"] for e in res.excluded}
+    assert "locked" in reasons["mine"] and "locked" in reasons["rep"]
+    assert {p.label for p in res.plans} == {"hold", "ladder-1", "ladder-2", "best"}
+    for p in res.plans:
+        assert out not in p.sells and inc not in p.buys and out in p.squad_after, p.label
+        assert all(out not in f["out"] and inc not in f["in"] for f in p.follow_up), p.label
+        assert p.valid, (p.label, p.issues)
+    assert res.problem["preferences"]["locked"] == [out]
+    assert res.problem["preferences"]["banned"] == [inc]
+    assert any("preferences apply" in a for a in res.assumptions)

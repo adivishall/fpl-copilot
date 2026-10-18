@@ -29,9 +29,11 @@ handler (ADR-0001 #3).
   FPL account credentials are ever accepted — sync uses the public entry id. The web UI calls
   the API through its server-side proxy (`/backend/*`), so the key never reaches a browser; the
   proxy answers `502` (`API unreachable`) or `504` (no response in 120 s) as JSON. Behind the
-  proxy all browser users share the proxy's key and therefore one rate-limit bucket.
-  The manager key is an identifier, not a credential: any holder of an API key (including every
-  user of the web UI) can read or erase any manager's data by key — a single-tenant design.
+  proxy, rate limits apply per visitor address when `FPL_TRUST_FORWARDED_FOR` is on (otherwise
+  all browser users share the proxy's key and one bucket). Since M1.1a a manager key is owned:
+  a signed-in user may read or change only the managers of their own account, operator keys
+  retain full access for operations, and the web proxy's key alone (an anonymous browser) gets
+  `401` on manager data — see *Accounts and beta access* in `docs/DEPLOYMENT.md`.
 
 ## Endpoints
 
@@ -52,7 +54,7 @@ handler (ADR-0001 #3).
 | `POST /replacement`, `POST /replacements` | Replacement engine (§60.3 contract per candidate) | |
 | `POST /chips/simulate` | Chip planner (all chips × weeks, value of waiting, reasons) + optional forced-chip what-if | |
 | `GET /workbench/context?manager_key=` | Transfer Workbench (M1.2): the squad with purchase and selling prices, next-GW and horizon expectations, availability, bank, transfers, chips and current weak spots | |
-| `POST /workbench/evaluate` | Evaluate concrete plans (HOLD always; your transfer, engine replacements for a player, the optimiser's best plan) for one stored squad state as a job; the same question on the same inputs returns the same run | `202` queued, `200` when already computed |
+| `POST /workbench/evaluate` | Evaluate concrete plans (HOLD always; your transfer, engine replacements for a player, the optimiser's best plan, the transfer ladder — the best plan with exactly 1, 2, … transfers now) for one stored squad state as a job, under optional constraints (kept and excluded players); the same question on the same inputs returns the same run | `202` queued, `200` when already computed; draws from the expensive rate bucket |
 | `GET /workbench/runs?manager_key=`, `GET /workbench/runs/{id}` | A manager's recent runs; one run with its result, `stale_state` / `stale_snapshot` flags and the names it needs | owner only |
 | `GET /recommendations/{id}/changes`, `GET /workbench/runs/{id}/changes` | Result lifecycle (M1.3): why a result is no longer current and what differs between the inputs it used and the inputs served now — stored-state diff, snapshot-to-snapshot diff when the superseded snapshot is still on disk, forecast versions; honest `available: false` otherwise | owner only |
 | `POST /scenarios`, `POST /what-if`, `POST /simulate` | Scenario re-simulation of the squad; optional transfer compared with holding under each scenario | |
@@ -193,19 +195,27 @@ populations). No verdict is present before a formal look (G = 8, 16, season end)
 ## Transfer Workbench contract (M1.2)
 
 `POST /workbench/evaluate` takes `manager_key`, optional `state_id` (default: the latest stored
-state), `horizon` (≤ the served maximum), `profile` and 1–8 `plans`:
+state), `horizon` (≤ the served maximum), `profile`, optional `preferences` and 1–8 `plans`:
 
 | `kind` | fields | evaluated as |
 |---|---|---|
 | `hold` | — | no transfer this gameweek, optimal afterwards (always included, the baseline) |
-| `transfer` | `sells`, `buys` | exactly these moves now (`first_gw_exact`), optimal afterwards; an illegal request is listed under `excluded` with the rule it breaks (squad size, position quota, club limit, budget with *selling* prices, unknown player) and never solved around |
+| `transfer` | `sells`, `buys` | exactly these moves now (`first_gw_exact`), optimal afterwards; an illegal request is listed under `excluded` with the rule it breaks (squad size, position quota, club limit, budget with *selling* prices, unknown player, a kept player sold, an excluded player bought) and never solved around |
 | `replace` | `out_player`, `candidates` (≤ 6) | the replacement engine's shortlist (every affordable, club-legal candidate screened; top gain, high upside, cheap enablers), each as an exact single transfer |
 | `best` | `max_transfers`, `allow_hits`, `alternatives` (≤ 4) | the optimiser's best plan, optionally capped in transfers now or forbidden to take hits anywhere; alternatives differ in their first-gameweek move |
+| `ladder` (M1.7) | `max_transfers` (rungs, ≤ 4; default: every free transfer plus one at a hit, at most 3), `allow_hits` | one plan per rung `k = 1 … max_transfers`: the optimiser's best plan with *exactly* `k` transfers now (`first_gw_min_transfers` = `first_gw_max_transfers` = `k`), optimal afterwards, labelled `<label>-<k>` with `rung: k`; a rung that would cost a hit is listed under `excluded` (with `rung` and the cost) when `allow_hits` is false |
+
+`preferences` (`locked`: owned players kept for the whole horizon, ≤ 15, must be in the squad
+— `422` otherwise; `banned`: players never bought nor shortlisted, ≤ 50) apply to every plan of
+the run, HOLD included; they are part of the question (another run when they differ) and are
+echoed in `result.result.problem.preferences` and in `assumptions`. Each rung is an independent
+exact solve; together with HOLD and the exact plans they run in `FPL_SOLVER_WORKERS` processes.
 
 The run (`GET /workbench/runs/{id}`) records `state_id`, `snapshot_id`, `forecast_key`,
 `prediction_run_id`, the forecast's cutoff, simulation count and seed, model versions, the
 optimiser config reference and the ruleset version. `result.result.plans` lists HOLD first, then
-valid plans by the optimiser's objective; each plan carries `action`, `sells` / `buys` with
+valid plans by the optimiser's objective; each plan carries `action`, `rung` (ladder plans:
+the exact transfer count asked for; `null` otherwise), `sells` / `buys` with
 `moves_out` / `moves_in` (price, selling price, xP, start probability), `valid` + `issues`
 (independent rules replay of the whole plan), `optimality` / `proven_optimal`, `transfers_now`,
 `hit_now`, `hits_total`, `hit_cost_vs_hold`, `gain_1gw` / `gain_horizon` (paired against HOLD on

@@ -86,3 +86,40 @@ def test_defaults_keep_problem_identifiers_and_hold_reuse_is_exact() -> None:
     assert [(o.label, o.sells, o.buys, round(o.solution.objective, 6)) for o in a] == [
         (o.label, o.sells, o.buys, round(o.solution.objective, 6)) for o in b
     ]
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_first_gameweek_minimum_makes_a_rung_exactly_k_transfers(seed: int) -> None:
+    """A transfer-ladder rung (M1.7) is 'exactly k transfers now': the minimum and the cap
+    together; later gameweeks stay free. A rung can only be as good as the unconstrained plan,
+    and the rung at the unconstrained plan's own transfer count is that plan."""
+    prob = tiny_league(seed, horizon=3, free_transfers=2)
+    free = build_and_solve(prob)
+    rungs = {}
+    for k in (1, 2):
+        sol = build_and_solve(
+            replace(
+                prob,
+                preferences=Preferences(first_gw_max_transfers=k, first_gw_min_transfers=k),
+            )
+        )
+        assert len(sol.first.transfers_in) == k and len(sol.first.transfers_out) == k
+        assert validate_solution(prob, sol).valid
+        assert sol.objective <= free.objective + 1e-6
+        rungs[k] = sol
+    n_free = len(free.first.transfers_in)
+    if n_free in rungs:
+        assert rungs[n_free].objective == pytest.approx(free.objective, abs=1e-6)
+    # a minimum alone binds only the first gameweek
+    at_least_one = build_and_solve(replace(prob, preferences=Preferences(first_gw_min_transfers=1)))
+    assert len(at_least_one.first.transfers_in) >= 1
+    assert validate_solution(prob, at_least_one).valid
+
+
+def test_minimum_transfers_is_absent_from_identifiers_until_set() -> None:
+    prob = tiny_league(5, horizon=2, free_transfers=1)
+    assert "first_gw_min_transfers" not in prob.describe()["preferences"]
+    desc = replace(
+        prob, preferences=replace(prob.preferences, first_gw_min_transfers=2)
+    ).describe()["preferences"]
+    assert desc["first_gw_min_transfers"] == 2

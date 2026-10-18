@@ -222,7 +222,17 @@ test("transfer workbench: whole-squad plans vs hold as a job → what-if, withou
   const runId = (await page.getByTestId("run-status").textContent())!.match(/Run (\S+)/)![1];
   const again = await web.get(`/backend/workbench/runs/${runId}`);
   expect(again.status()).toBe(200);
-  expect((await again.json()).result.result.plans[0].label).toBe("hold");
+  const stored = await again.json();
+  expect(stored.result.result.plans[0].label).toBe("hold");
+  // the transfer ladder (M1.7) is part of the default question: exact rungs, shown as stored
+  await expect(page.getByTestId("ladder")).toBeVisible();
+  await expect(page.getByTestId("ladder-rung-1")).toBeVisible();
+  const rungs = (stored.result.result.plans as { kind: string; rung: number | null; transfers_now: number; gain_horizon: { mean: number } }[]).filter((p) => p.kind === "ladder");
+  expect(rungs.length).toBeGreaterThanOrEqual(1);
+  for (const r of rungs) {
+    expect(r.transfers_now).toBe(r.rung);
+    await expect(page.getByTestId(`ladder-net-${r.rung}`)).toHaveText(`${r.gain_horizon.mean >= 0 ? "+" : ""}${r.gain_horizon.mean.toFixed(2)}`);
+  }
   await page.goto("/what-if");
   await page.getByLabel("player").selectOption({ index: 1 });
   await page.getByLabel("sell").fill(outCode);

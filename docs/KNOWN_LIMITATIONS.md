@@ -19,7 +19,9 @@ generated reports so they cannot drift from this page.
   0–4); the API refuses longer horizons rather than serve an extrapolation (§3).
 * **Latency.** Recommendations take 42–90 s as worker jobs; the Transfer Workbench runs its
   plan comparison as a job too (HOLD + 3 replacements + best plan: tens of seconds, §5); the
-  older `POST /replacements` endpoint still holds a request open for 13–49 s (§5).
+  older `POST /replacements` endpoint still holds a request open for 13–49 s (§5). The
+  transfer ladder (M1.7) adds one exact solve per rung (at most four), so a ladder question is
+  slower than the default one by that many solves on one worker (§5).
 * **Result lifecycle.** Snapshot promotion and finalisation races are handled (`docs/architecture/
   result-lifecycle.md`); the "what changed" snapshot diff needs the superseded snapshot's export
   on disk (retention keeps referenced snapshots, caches dropped) and otherwise reports only the
@@ -279,7 +281,14 @@ Contract: `docs/architecture/season-evaluation.md`.
   question and serves the stored run afterwards (`docs/BUILD_STATUS.md` §2d has the measured
   timings); it compares HOLD, exact transfers, engine replacements and the optimiser's plans,
   but chip alternatives and the §69 stress scenarios are still only in the full
-  recommendation package. The replacement picker endpoint holds an HTTP request open
+  recommendation package. The transfer ladder (M1.7) shows the best plan with *exactly* k
+  transfers now for k = 1 … 4: a rung is a first-gameweek commitment with later gameweeks
+  re-optimised, its hit follows from the stored free transfers (no chip is played in a
+  workbench plan), and "exactly k" is the optimiser's best among plans with k moves now on
+  this forecast — a lower-scoring later rung means the extra move does not pay, not that it is
+  illegal. Kept and excluded players (`preferences`) bind every plan of a run including HOLD's
+  later gameweeks; forced transfers remain the `transfer` kind, and a per-gameweek hit budget
+  beyond "allow hits or not" is not offered. The replacement picker endpoint holds an HTTP request open
   while it solves serially: 12.5–13.8 s for one outgoing player in the stage report, 48.9 s for
   another (232 candidates screened) on the deployed API; a 5-GW what-if takes ~8 s.
   `ml/reports/performance_stages.md` shows where the time goes: after parallelising independent

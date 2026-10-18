@@ -57,6 +57,8 @@ def _settings(db: str, tmp: Path, root: Path) -> Settings:
         horizon_default=2,
         horizon_max=2,
         forecast_horizon=2,
+        # several evaluations per minute: the limiter is tested in test_api with its own settings
+        expensive_rate_limit_per_minute=600,
         sync_horizon_limit=2,
     )
 

@@ -117,6 +117,14 @@ class RecommendationIn(_Req):
     )
 
 
+class WorkbenchPreferencesIn(_Req):
+    """Manager constraints applied to every plan of a workbench run (M1.7): ``locked`` owned
+    players are kept all horizon, ``banned`` players are never bought nor shortlisted."""
+
+    locked: list[int] = Field(default_factory=list, max_length=15)
+    banned: list[int] = Field(default_factory=list, max_length=50)
+
+
 class WorkbenchIn(_Req):
     """Transfer Workbench (M1.2): evaluate concrete plans for a stored squad state."""
 
@@ -125,6 +133,7 @@ class WorkbenchIn(_Req):
     profile: Literal["default", "conservative", "aggressive"] = "default"
     horizon: int | None = Field(None, ge=1, le=SUPPORTED_HORIZON)
     plans: list[PlanSpec] = Field(min_length=1, max_length=8)
+    preferences: WorkbenchPreferencesIn | None = None
 
 
 class RegisterIn(_Req):

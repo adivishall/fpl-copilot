@@ -95,6 +95,14 @@ code; "Differentiation" is honest about where competitors already are.
 
 ### C3. Whole-squad transfer and replacement comparisons against HOLD (priority 3)
 
+**Status (M1.7, 2026-10-19):** the transfer-count ladder and manager constraints are
+implemented in the Transfer Workbench (`docs/BUILD_STATUS.md` §2j): one run compares HOLD with
+the best plan at exactly 1, 2, … transfers now (free or at a hit), every rung validated and
+scored on HOLD's samples, with kept and excluded players binding every plan. Multi-out exact
+repairs are accepted by the API (`transfer` with several sells and buys) but the page still
+submits one out / one in; precomputed shortlists and the hit view as a separate page remain
+open.
+
 | | |
 |---|---|
 | **Exists** | Recommendation = MILP plan + alternatives + explicit HOLD, paired Monte-Carlo gains, thresholds per profile (`engine.py:372-389`); replacement picker for one player out with gain 1 GW/horizon, p10/p90, P(>0), hit cost and follow-up moves; what-if single sell/buy vs HOLD (`/scenarios`); hit cost from the ruleset inside the objective |

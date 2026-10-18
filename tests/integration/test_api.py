@@ -33,6 +33,9 @@ def _settings(db: str | None, tmp: Path, **kw) -> Settings:  # type: ignore[no-u
         horizon_max=2,
         forecast_horizon=2,
         sync_horizon_limit=2,
+        # functional modules sharing this client submit many evaluations in a minute; the
+        # limiter itself is exercised by test_api_key_and_rate_limit with its own settings
+        expensive_rate_limit_per_minute=600,
         **kw,
     )
 

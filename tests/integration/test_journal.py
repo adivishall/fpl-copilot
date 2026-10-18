@@ -70,6 +70,8 @@ def world(pg_url: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[dic
         horizon_default=2,
         horizon_max=2,
         forecast_horizon=2,
+        # several evaluations per minute: the limiter is tested in test_api with its own settings
+        expensive_rate_limit_per_minute=600,
         sync_horizon_limit=2,
     )
     mark_serving_ready(st, a.name, "fc_a")

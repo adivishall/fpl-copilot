@@ -36,6 +36,13 @@ def main() -> None:
     ap.add_argument("--api", default="http://127.0.0.1:8000")
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--horizon", type=int, default=None)
+    ap.add_argument(
+        "--ladder",
+        type=int,
+        default=0,
+        metavar="RUNGS",
+        help="add a transfer ladder of this many rungs (M1.7) to the question",
+    )
     args = ap.parse_args()
     key = os.environ.get("FPL_OPS_KEY")
     if not key:
@@ -73,6 +80,11 @@ def main() -> None:
             {"kind": "hold"},
             {"kind": "replace", "label": "replace", "out_player": out, "candidates": 3},
             {"kind": "best", "label": "best", "alternatives": 1},
+            *(
+                [{"kind": "ladder", "label": "ladder", "max_transfers": args.ladder}]
+                if args.ladder
+                else []
+            ),
         ],
     }
     t_submit, r = timed("POST", "/workbench/evaluate", json=body)
@@ -97,7 +109,8 @@ def main() -> None:
         ),
         (
             f"POST /workbench/evaluate, new question ({body['horizon']} GW; HOLD + 3 "
-            "replacements + best + 1 alternative)",
+            "replacements + best + 1 alternative"
+            + (f" + a {args.ladder}-rung ladder)" if args.ladder else ")"),
             f"{t_submit:.0f} ms (HTTP {status_code}; {run['status']} after "
             f"{t_ready / 1000:.1f} s; {n_plans} plans served)",
         ),

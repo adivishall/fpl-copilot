@@ -246,8 +246,24 @@ class WorkbenchStore:
             return int(getattr(res, "rowcount", 0) or 0)
 
 
+def workbench_preferences(request: dict[str, Any]) -> Preferences:
+    """The manager's constraints of a run (M1.7): locked players are kept all horizon, excluded
+    players are never bought — applied to every plan the run evaluates."""
+    prefs = request.get("preferences") or {}
+    return Preferences(
+        locked=frozenset(int(c) for c in prefs.get("locked", [])),
+        banned=frozenset(int(c) for c in prefs.get("banned", [])),
+    )
+
+
 def workbench_problem(
-    svc: Any, ctx: CurrentContext, fc: Forecast, st: ManagerState, horizon: int, profile: str
+    svc: Any,
+    ctx: CurrentContext,
+    fc: Forecast,
+    st: ManagerState,
+    horizon: int,
+    profile: str,
+    preferences: Preferences | None = None,
 ) -> OptimizationProblem:
     """The planning problem on the *full* player universe (every player with a forecast), so a
     plan may name any player; the workbench pools it per plan."""
@@ -259,7 +275,7 @@ def workbench_problem(
         players=table,
         gameweeks=tuple(range(ctx.gameweek, ctx.gameweek + table.horizon)),
         config=load_optimizer_config(profile),
-        preferences=Preferences(),
+        preferences=preferences or Preferences(),
     )
 
 
@@ -268,7 +284,9 @@ def compute_workbench(svc: Any, run: dict[str, Any], st: ManagerState) -> dict[s
     ctx = svc.context()
     h = svc.horizon(run["horizon"])
     fc = svc.forecast_for(ctx, h)
-    prob = workbench_problem(svc, ctx, fc, st, h, run["profile"])
+    prob = workbench_problem(
+        svc, ctx, fc, st, h, run["profile"], workbench_preferences(run["request"])
+    )
     specs = [PlanSpec.model_validate(p) for p in run["request"]["plans"]]
     res = evaluate_plans(
         prob,

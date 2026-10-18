@@ -510,7 +510,13 @@ export interface WorkbenchContext {
   freshness: Freshness;
 }
 
-export type PlanKind = "hold" | "transfer" | "replace" | "best";
+export type PlanKind = "hold" | "transfer" | "replace" | "best" | "ladder";
+
+/** Manager constraints applied to every plan of a run (M1.7). */
+export interface WorkbenchPreferences {
+  locked: number[];
+  banned: number[];
+}
 
 export interface PlanSpec {
   kind: PlanKind;
@@ -541,6 +547,7 @@ export interface WorkbenchPlan {
   kind: PlanKind;
   requested_by: "manager" | "engine";
   reason: string;
+  rung: number | null; // ladder plans: exactly this many transfers now
   action: string;
   sells: number[];
   buys: number[];
@@ -575,7 +582,7 @@ export interface WorkbenchResult {
   gameweek: number;
   horizon: number;
   plans: WorkbenchPlan[];
-  excluded: { label: string; reason: string; sells?: number[]; buys?: number[] }[];
+  excluded: { label: string; reason: string; sells?: number[]; buys?: number[]; rung?: number }[];
   notes: string[];
   n_simulations: number;
   simulation_seed: number | null;
@@ -595,7 +602,7 @@ export interface WorkbenchRun {
   version: string;
   horizon: number;
   profile: string;
-  request: { plans: PlanSpec[]; horizon: number; profile: string };
+  request: { plans: PlanSpec[]; horizon: number; profile: string; preferences?: WorkbenchPreferences };
   status: "queued" | "running" | "succeeded" | "failed";
   job_id: string | null;
   result: {

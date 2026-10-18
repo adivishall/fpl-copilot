@@ -7,15 +7,17 @@ import { LifecycleBadge, WhatChanged } from "@/components/lifecycle";
 import { PlayerPicker } from "@/components/player-picker";
 import { Badge, Callout, Card, PageHeader, PlayerName, Prob, State, confidenceTone, useApi } from "@/components/ui";
 import { track } from "@/lib/analytics";
-import { ApiError, api, post, type PlanSpec, type PlayerRow, type WorkbenchContext, type WorkbenchPlan, type WorkbenchRun } from "@/lib/api";
+import { ApiError, api, post, type PlanSpec, type PlayerRow, type WorkbenchContext, type WorkbenchPlan, type WorkbenchPreferences, type WorkbenchRun } from "@/lib/api";
 import { money, pct, signed, when } from "@/lib/format";
 import { horizonMax, loadSettings } from "@/lib/settings";
 
-// Transfer Workbench (M1.2). Every number on this page comes from one evaluation run of the
-// API: concrete plans (HOLD always; your transfer, the engine's replacements for a player, the
-// optimiser's best plan) solved as whole-squad plans on the same forecast and simulation, each
-// validated against the rules, with its hit cost separated from its gross gain. The page never
-// computes a plan itself.
+// Transfer Workbench (M1.2; M1.7 ladder and preferences). Every number on this page comes from
+// one evaluation run of the API: concrete plans (HOLD always; your transfer, the engine's
+// replacements for a player, the optimiser's best plan, the transfer ladder — the best plan with
+// exactly 1, 2, … transfers now) solved as whole-squad plans on the same forecast and
+// simulation, each validated against the rules, with its hit cost separated from its gross gain.
+// Players you keep or exclude constrain every plan of the run. The page never computes a plan
+// itself.
 
 const STATUS: Record<string, string> = { a: "available", d: "doubtful", i: "injured", s: "suspended", u: "unavailable", n: "not in squad" };
 
@@ -32,6 +34,10 @@ export default function TransferWorkbench() {
   const [includeBest, setIncludeBest] = useState(true);
   const [allowHits, setAllowHits] = useState(true);
   const [maxTransfers, setMaxTransfers] = useState<string>("");
+  const [ladder, setLadder] = useState(true);
+  const [rungs, setRungs] = useState<string>(""); // "" = the API's default: every free transfer plus one at a hit
+  const [locked, setLocked] = useState<number[]>([]);
+  const [banned, setBanned] = useState<PlayerRow[]>([]);
   const [horizon, setHorizon] = useState<number>(settings.horizon);
   const [hMax, setHMax] = useState<number | undefined>(undefined);
   const [run, setRunState] = useState<WorkbenchRun | null>(null);
@@ -97,22 +103,28 @@ export default function TransferWorkbench() {
     return () => clearTimeout(t);
   }, [pending, run, refresh]);
 
+  const preferences: WorkbenchPreferences | undefined = useMemo(() => {
+    if (!locked.length && !banned.length) return undefined;
+    return { locked: [...locked].sort((a, b) => a - b), banned: banned.map((b) => b.player_code).sort((a, b) => a - b) };
+  }, [locked, banned]);
+
   async function evaluate() {
     if (!ctx.data) return;
     const plans: PlanSpec[] = [{ kind: "hold" }];
     if (out !== null && mode === "replace") plans.push({ kind: "replace", label: "replace", out_player: out, candidates: 3 });
     if (out !== null && mode === "transfer" && incoming) plans.push({ kind: "transfer", label: "your transfer", sells: [out], buys: [incoming.player_code] });
+    if (ladder) plans.push({ kind: "ladder", label: "ladder", allow_hits: allowHits, max_transfers: rungs ? Number(rungs) : null });
     if (includeBest) plans.push({ kind: "best", label: "best", allow_hits: allowHits, max_transfers: maxTransfers ? Number(maxTransfers) : null, alternatives: 1 });
-    await submit({ manager_key: settings.managerKey, horizon, profile: settings.profile, plans });
+    await submit({ manager_key: settings.managerKey, horizon, profile: settings.profile, plans, preferences });
   }
 
-  // retrying a failed run asks *its* question again (its plans, horizon, profile and squad
-  // state), not whatever the form holds now: the same run is re-queued
+  // retrying a failed run asks *its* question again (its plans, horizon, profile, preferences
+  // and squad state), not whatever the form holds now: the same run is re-queued
   async function retry(r: WorkbenchRun) {
-    await submit({ manager_key: settings.managerKey, state_id: r.state_id, horizon: r.request.horizon, profile: r.request.profile, plans: r.request.plans });
+    await submit({ manager_key: settings.managerKey, state_id: r.state_id, horizon: r.request.horizon, profile: r.request.profile, plans: r.request.plans, preferences: r.request.preferences });
   }
 
-  async function submit(body: { manager_key: string; state_id?: string; horizon: number; profile: string; plans: PlanSpec[] }) {
+  async function submit(body: { manager_key: string; state_id?: string; horizon: number; profile: string; plans: PlanSpec[]; preferences?: WorkbenchPreferences }) {
     setBusy(true);
     setErr(null);
     setSelected(null);
@@ -122,7 +134,7 @@ export default function TransferWorkbench() {
       // nothing else (the initial latest-run load, a late poll) may put another run on it
       shown.current = "pending";
       setRunState(null);
-      const r = await post<WorkbenchRun>("/workbench/evaluate", body);
+      const r = await post<WorkbenchRun>("/workbench/evaluate", body.preferences ? body : { ...body, preferences: undefined });
       setRun(r);
       track("workbench_evaluated", { plans: body.plans.length, horizon: body.horizon });
     } catch (e) {
@@ -138,6 +150,15 @@ export default function TransferWorkbench() {
   const hold = res?.plans[0] ?? null;
   const chosen = res?.plans.find((p) => p.label === selected) ?? null;
   const c = ctx.data;
+  const ladderPlans = useMemo(() => (res?.plans ?? []).filter((p) => p.kind === "ladder").sort((a, b) => (a.rung ?? 0) - (b.rung ?? 0)), [res]);
+  const ladderExcluded = useMemo(() => (res?.excluded ?? []).filter((e) => e.rung !== undefined).sort((a, b) => (a.rung ?? 0) - (b.rung ?? 0)), [res]);
+  const bestPlan = res?.plans.find((p) => p.kind === "best" && p.label === "best") ?? null;
+  const runPrefs = (res?.problem as { preferences?: { locked?: number[]; banned?: number[] } } | undefined)?.preferences;
+  const freeLeft = c ? Math.max(0, c.state.free_transfers - c.state.transfers_made) : 1;
+  const defaultRungs = Math.min(3, Math.max(1, freeLeft + 1));
+  function toggleLock(code: number) {
+    setLocked((l) => (l.includes(code) ? l.filter((x) => x !== code) : [...l, code]));
+  }
 
   return (
     <>
@@ -158,7 +179,7 @@ export default function TransferWorkbench() {
               <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Player</th><th>Pos</th><th>Club</th><th>Bought / now / sells</th><th className="num">xP next</th><th className="num">xP {c.horizon} GW</th><th className="num">Start</th><th>Status</th><th></th></tr>
+                  <tr><th>Player</th><th>Pos</th><th>Club</th><th>Bought / now / sells</th><th className="num">xP next</th><th className="num">xP {c.horizon} GW</th><th className="num">Start</th><th>Status</th><th></th><th></th></tr>
                 </thead>
                 <tbody>
                   {c.players.map((p) => (
@@ -177,8 +198,18 @@ export default function TransferWorkbench() {
                       <td className="num">{pct(p.p_start_next)}</td>
                       <td><Badge tone={p.status === "a" ? "good" : p.status === "d" ? "warn" : "bad"}>{STATUS[p.status] ?? p.status}</Badge></td>
                       <td>
-                        <button className={out === p.player_code ? "" : "secondary"} onClick={() => { setOut(p.player_code); setIncoming(null); }} data-testid={`out-${p.player_code}`}>
+                        <button className={out === p.player_code ? "" : "secondary"} onClick={() => { setOut(p.player_code); setIncoming(null); }} data-testid={`out-${p.player_code}`} disabled={locked.includes(p.player_code)}>
                           {out === p.player_code ? "Selling" : "Sell"}
+                        </button>
+                      </td>
+                      <td>
+                        <button
+                          className={locked.includes(p.player_code) ? "" : "secondary"}
+                          onClick={() => { toggleLock(p.player_code); if (out === p.player_code) setOut(null); }}
+                          data-testid={`lock-${p.player_code}`}
+                          title="Keep this player in every plan of the evaluation (all gameweeks of the horizon)"
+                        >
+                          {locked.includes(p.player_code) ? "Kept" : "Keep"}
                         </button>
                       </td>
                     </tr>
@@ -225,20 +256,48 @@ export default function TransferWorkbench() {
                 ))}
               </select>
             </label>
+            <label><input type="checkbox" checked={ladder} onChange={(e) => setLadder(e.target.checked)} data-testid="include-ladder" /> transfer ladder (best plan with exactly 1, 2, … transfers now)</label>
+            {ladder ? (
+              <label>
+                rungs{" "}
+                <select value={rungs} onChange={(e) => setRungs(e.target.value)} data-testid="ladder-rungs">
+                  <option value="">{`${defaultRungs} (free transfers + one hit)`}</option>
+                  {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+            ) : null}
             <label><input type="checkbox" checked={includeBest} onChange={(e) => setIncludeBest(e.target.checked)} data-testid="include-best" /> include the optimiser's best plan</label>
+            {includeBest || ladder ? (
+              <label><input type="checkbox" checked={allowHits} onChange={(e) => setAllowHits(e.target.checked)} data-testid="allow-hits" /> allow hits</label>
+            ) : null}
             {includeBest ? (
-              <>
-                <label><input type="checkbox" checked={allowHits} onChange={(e) => setAllowHits(e.target.checked)} data-testid="allow-hits" /> allow hits</label>
-                <label>
-                  max transfers now{" "}
-                  <select value={maxTransfers} onChange={(e) => setMaxTransfers(e.target.value)} data-testid="max-transfers">
-                    <option value="">optimiser decides</option>
-                    {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
-                  </select>
-                </label>
-              </>
+              <label>
+                max transfers now{" "}
+                <select value={maxTransfers} onChange={(e) => setMaxTransfers(e.target.value)} data-testid="max-transfers">
+                  <option value="">optimiser decides</option>
+                  {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
             ) : null}
           </div>
+          <details data-testid="wb-preferences">
+            <summary className="small">
+              Constraints for every plan: {locked.length ? `${locked.length} kept` : "none kept"} · {banned.length ? `${banned.length} excluded` : "none excluded"}
+            </summary>
+            <p className="small">Kept players stay in the squad for the whole horizon (use the Keep buttons above); excluded players are never bought nor shortlisted.</p>
+            {c ? (
+              <PlayerPicker onPick={(p) => setBanned((b) => (b.some((x) => x.player_code === p.player_code) ? b : [...b, p]))} exclude={[...squadCodes, ...banned.map((b) => b.player_code)]} label="Exclude a player" testId="wb-exclude" />
+            ) : null}
+            {banned.length ? (
+              <ul className="clean" data-testid="wb-excluded-list">
+                {banned.map((b) => (
+                  <li key={b.player_code} className="small">
+                    {b.name} ({b.team}) <button className="secondary" onClick={() => setBanned((l) => l.filter((x) => x.player_code !== b.player_code))} data-testid={`unban-${b.player_code}`}>remove</button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </details>
           <p>
             <button onClick={() => void evaluate()} disabled={busy || pending || !c || (mode === "transfer" && out !== null && !incoming)} data-testid="evaluate">
               {busy ? "Submitting…" : pending ? "Evaluating…" : "Evaluate plans"}
@@ -297,6 +356,7 @@ export default function TransferWorkbench() {
                     <tr key={p.label} data-testid={`plan-${p.label}`} className={!p.valid ? "invalid" : p.label === "hold" ? "baseline" : undefined}>
                       <td>
                         <Badge tone={actionTone(p.action)}>{p.action}</Badge> <strong>{p.label}</strong>
+                        {p.rung ? <> <Badge tone="neutral">exactly {p.rung} now</Badge></> : null}
                         <div className="small">{p.reason}{p.requested_by === "engine" ? " (engine)" : ""}</div>
                         {!p.valid ? <div className="error">illegal — not recommended: {p.issues.join("; ")}</div> : null}
                       </td>
@@ -332,9 +392,68 @@ export default function TransferWorkbench() {
                 </div>
               ) : null}
               {res.notes.length ? <p className="small">{res.notes.join(" · ")}</p> : null}
+              {res.assumptions.length ? (
+                <details data-testid="wb-assumptions">
+                  <summary className="small">What this comparison assumes ({res.assumptions.length})</summary>
+                  <ul className="clean">
+                    {res.assumptions.map((a) => <li key={a} className="small">{a}</li>)}
+                  </ul>
+                </details>
+              ) : null}
             </>
           ) : null}
         </Card>
+
+        {res && hold && (ladderPlans.length || ladderExcluded.length) ? (
+          <Card title="Transfer ladder: what each transfer buys" testId="ladder" wide tone="accent">
+            <p className="small">
+              Each rung is the optimiser's best plan with <em>exactly</em> that many transfers now, later gameweeks re-optimised, scored on the same samples as holding; a rung's hit follows from your free transfers.
+              {bestPlan ? ` The unconstrained best plan makes ${bestPlan.transfers_now} transfer${bestPlan.transfers_now === 1 ? "" : "s"} now.` : ""}
+              {runPrefs && (runPrefs.locked?.length || runPrefs.banned?.length) ? (
+                <> Constraints: {runPrefs.locked?.length ? <>kept {runPrefs.locked.map((code) => <span key={code}><PlayerName code={code} names={names} /> </span>)}</> : null}{runPrefs.banned?.length ? <>excluded {runPrefs.banned.map((code) => <span key={code}><PlayerName code={code} names={names} /> </span>)}</> : null}</>
+              ) : null}
+            </p>
+            <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Transfers now</th><th>Moves</th><th className="num">Hit now</th><th className="num">Net vs hold ({res.horizon} GW)</th><th className="num">Gross</th><th>p10 / p90</th><th>P(&gt;hold)</th><th>Bank / FT after</th><th>Solver</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr className="baseline" data-testid="ladder-rung-0">
+                  <td>0 (hold)</td><td className="small">none</td><td className="num">0</td><td className="num"><span className="muted">baseline</span></td><td className="num">—</td><td>—</td><td>—</td>
+                  <td className="small nowrap">{money(hold.bank_after)} / {hold.free_transfers_after}</td>
+                  <td>{hold.proven_optimal ? <Badge tone="good">proven optimal</Badge> : <Badge tone="warn">best within limit</Badge>}</td>
+                  <td><button className="secondary" onClick={() => setSelected("hold")}>Details</button></td>
+                </tr>
+                {ladderPlans.map((p) => (
+                  <tr key={p.label} data-testid={`ladder-rung-${p.rung}`} className={!p.valid ? "invalid" : undefined}>
+                    <td><strong>{p.rung}</strong> <Badge tone={actionTone(p.action)}>{p.action}</Badge>{!p.valid ? <div className="error">illegal — not recommended: {p.issues.join("; ")}</div> : null}</td>
+                    <td className="small">
+                      {p.sells.map((s, i) => (
+                        <div key={s}><PlayerName code={s} names={names} /> → <PlayerName code={p.buys[i] ?? s} names={names} /></div>
+                      ))}
+                    </td>
+                    <td className="num">{p.hit_now ? `−${p.hit_now}` : "0"}</td>
+                    <td className="num" data-testid={`ladder-net-${p.rung}`}>{signed(p.gain_horizon.mean)}</td>
+                    <td className="num">{signed(p.gross_gain_horizon)}</td>
+                    <td className="small nowrap">{signed(p.gain_horizon.p10, 0)} / {signed(p.gain_horizon.p90, 0)}</td>
+                    <td><Badge tone={confidenceTone(p.gain_horizon.probability_positive)}>{pct(p.gain_horizon.probability_positive)}</Badge></td>
+                    <td className="small nowrap">{money(p.bank_after)} / {p.free_transfers_after}</td>
+                    <td title={p.optimality}>{p.proven_optimal ? <Badge tone="good">proven optimal</Badge> : <Badge tone="warn">{p.optimality.startsWith("best valid plan among those explored") ? "best explored" : "best within limit"}</Badge>}</td>
+                    <td><button className="secondary" onClick={() => { setSelected(p.label); track("workbench_plan_selected", { kind: p.kind }); }} data-testid={`ladder-details-${p.rung}`}>Details</button></td>
+                  </tr>
+                ))}
+                {ladderExcluded.map((e) => (
+                  <tr key={e.label} className="muted" data-testid={`ladder-excluded-${e.rung}`}>
+                    <td><strong>{e.rung}</strong></td><td colSpan={9} className="small">not evaluated: {e.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            </div>
+            <p className="small">A later rung that scores below an earlier one means the extra transfer does not pay on this forecast. Expected gains are estimates, not guarantees.</p>
+          </Card>
+        ) : null}
 
         {chosen && hold ? (
           <Card title={`Plan: ${chosen.label}`} testId="plan-details" wide>

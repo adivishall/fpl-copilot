@@ -192,3 +192,54 @@ def test_runs_belong_to_their_owner_and_are_exported_and_erased(
     assert [x["id"] for x in export["workbench_runs"]] == [run_id]
     assert client.delete(f"/api/v1/managers/{a_key}", headers=_bearer(alice)).status_code == 200
     assert client.get(f"/api/v1/workbench/runs/{run_id}").status_code == 404
+
+
+def test_a_ladder_with_preferences_is_one_validated_run(
+    client: TestClient, squad: list[int]
+) -> None:
+    """Transfer ladder (M1.7) through the API: rungs are exact transfer counts, the manager's
+    locked / excluded players are part of the question (another run without them), locked
+    players must be owned, and a ladder is bounded in rungs."""
+    ctx = client.get("/api/v1/workbench/context", params={"manager_key": KEY}).json()
+    keep = _mid(ctx)
+    body = {
+        "manager_key": KEY,
+        "horizon": 2,
+        "plans": [{"kind": "hold"}, {"kind": "ladder", "label": "ladder", "max_transfers": 2}],
+        "preferences": {"locked": [keep], "banned": []},
+    }
+    r = client.post("/api/v1/workbench/evaluate", json=body)
+    assert r.status_code == 200, r.text
+    run = r.json()
+    res = run["result"]["result"]
+    rungs = sorted((p for p in res["plans"] if p["kind"] == "ladder"), key=lambda p: p["rung"])
+    assert [p["rung"] for p in rungs] == [1, 2] and [p["label"] for p in rungs] == [
+        "ladder-1",
+        "ladder-2",
+    ]
+    for p in rungs:
+        assert p["transfers_now"] == p["rung"] and p["valid"] and keep not in p["sells"]
+        assert keep in p["squad_after"] and p["requested_by"] == "engine"
+    assert rungs[0]["hit_now"] == 0 and rungs[1]["hit_now"] == ctx["rules"]["hit_cost"]
+    assert res["problem"]["preferences"]["locked"] == [keep]
+    assert run["request"]["preferences"] == {"locked": [keep], "banned": []}
+    assert any("preferences apply" in a for a in res["assumptions"])
+    # the same question is the same run; the preferences are part of the question
+    again = client.post("/api/v1/workbench/evaluate", json=body)
+    assert again.status_code == 200 and again.json()["id"] == run["id"]
+    without = client.post(
+        "/api/v1/workbench/evaluate", json={k: v for k, v in body.items() if k != "preferences"}
+    )
+    assert without.status_code == 200 and without.json()["id"] != run["id"]
+    assert "preferences" not in without.json()["request"]
+    # a locked player must be in the squad; a ladder has at most four rungs
+    bad = client.post(
+        "/api/v1/workbench/evaluate",
+        json={**body, "preferences": {"locked": [999_999_999], "banned": []}},
+    )
+    assert bad.status_code == 422 and "locked players must be in the squad" in bad.text
+    too_tall = client.post(
+        "/api/v1/workbench/evaluate",
+        json={"manager_key": KEY, "plans": [{"kind": "ladder", "max_transfers": 5}]},
+    )
+    assert too_tall.status_code == 422
