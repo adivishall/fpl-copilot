@@ -174,6 +174,20 @@ with a `basic_auth` block the gate is on; **an empty file turns it off** (valida
 **Logs.** Caddy keeps no access log, and its error log drops request URIs (manager keys appear in
 paths and queries) and authorisation headers.
 
+**A front end on another host.** The Caddyfile routes `/api/v1/*` to the API container and
+everything else to `web`, so a copy of the web app hosted elsewhere (the Vercel deployment of
+`apps/web`, root directory `apps/web`, production branch `develop`) can use the site as its
+backend: its server-side proxy (`apps/web/app/backend/[...path]/route.ts`) builds
+`<FPL_API_INTERNAL_URL>/api/v1/<path>`, so set `FPL_API_INTERNAL_URL=https://<site>` and
+`FPL_API_KEY=<the host's FPL_WEB_API_KEY>` as server-side variables there (never `NEXT_PUBLIC_*`).
+What that publishes is exactly what the web container already calls: the key-gated routes,
+with the public reference reads (`/health`, `/gameweeks`, `/players`, `/models` …) answering
+without a key as they do through the web proxy; manager data still needs a signed-in session
+or an operator key, and `/metrics`, `/docs` and `/openapi.json` are not under `/api/v1` and stay
+private. Rate limits: Caddy sets `X-Forwarded-For` from the connection, so requests arriving
+through another host's proxy count per that proxy's egress address, not per visitor (the
+site's own web container keeps per-visitor buckets).
+
 **Host.** One small VM: 2 vCPUs minimum, 4 recommended (`FPL_SOLVER_WORKERS` = vCPUs); 4 GB RAM
 minimum, 8 GB recommended (serving forecast ~2 GB peak in the worker); 30 GB disk; Docker Engine
 with Compose v2. Inbound 80/443 (and SSH); outbound `fantasy.premierleague.com`,
