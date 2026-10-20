@@ -135,6 +135,15 @@ generated reports so they cannot drift from this page.
 * The decision engine's thresholds (`min_gain`, `min_prob_positive`) trade activity for
   stability; plans beyond the first week are provisional (most next-week plans change).
 * The "FPL-style heuristic" baseline is an approximation; the official algorithm is not public.
+* **Defect 65 (open, found on the deployment rehearsal of 2026-10-20).** A stored squad state
+  keeps the gameweek of the snapshot it was saved or synced on, and nothing advances it when
+  the serving snapshot moves to a later gameweek. *Generate recommendation* then accepts the
+  request, and the worker job fails with `horizon must start at the state's gameweek`, which
+  the Overview shows as a raw error until the squad is synced or saved again. Seen when the
+  first live snapshot (GW8) replaced the seed snapshot (GW2) seconds after a squad was saved;
+  the same mismatch arises at every deadline for a squad not re-synced since. Workaround:
+  re-sync (FPL ID) or re-save the squad; the fix (advance the state, or refuse with a clear
+  message and a sync prompt) is product work, not deployment work.
 
 ## 4a. Decision journal and outcome evaluation (M1.4)
 
@@ -340,6 +349,12 @@ Contract: `docs/architecture/season-evaluation.md`.
   for anonymous browsers (the API warns about nothing here; it is an operator responsibility).
 * TLS: `docker-compose.public.yml` (Caddy) terminates TLS with automatic certificates; verified
   locally with Caddy's internal CA. Publicly trusted issuance is only exercised on a real domain.
+* The public proxy publishes `/api/v1/*` (for a front end hosted elsewhere, e.g. the Vercel
+  deployment) with exactly the API's own gate: public reference reads answer without a key,
+  everything else needs the web key or an operator key, manager data a signed-in session.
+  Requests that arrive through another host's proxy share that host's rate-limit buckets
+  (per egress address), so a busy front-end host can throttle itself; `/metrics`, `/docs` and
+  `/openapi.json` are not published.
 * Webhook SSRF defence: HTTPS-only, no credentials, exact host allow-list, port 443, every
   resolved address global (IPv4-mapped and NAT64 forms unwrapped), no redirects, 5 s timeout.
   **Residual risk:** DNS is resolved again by the HTTP client at connect time, so a rebinding

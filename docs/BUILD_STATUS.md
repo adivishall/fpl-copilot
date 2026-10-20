@@ -33,8 +33,8 @@ requirement and marks partial work as PARTIAL (99 requirements: 81 COMPLETE, 15 
 V1 release work after M14 is planned and logged in `docs/V1_RELEASE_PLAN.md`; its verification
 records are §2a and §2b (final). Public deployment waits on operator inputs (host, domain,
 secrets); everything else for V1 is done. Product milestones after V1 are recorded in §2c
-(M1.1a), §2d (M1.2), §2e (M1.3), §2f (M1.4), §2g (M1.5), §2h (M1.6), §2j (M1.7) and §2k
-(M1.8); §2i is the release sprint.
+(M1.1a), §2d (M1.2), §2e (M1.3), §2f (M1.4), §2g (M1.5), §2h (M1.6), §2j (M1.7), §2k
+(M1.8) and §2l (the Vercel front end and the Arm backend rehearsal); §2i is the release sprint.
 
 ## 2. M14 verification record (2026-10-04 – 06, local machine)
 
@@ -592,6 +592,43 @@ league, overwritten on refresh and deleted with it; they are never logged. Not d
 Workbench plan against rivals, automatic re-reads after each deadline, head-to-head leagues,
 live in-gameweek points, a rank or ownership objective. Defects 52 and 53 are unchanged.
 
+## 2l. Zero-cost deployment — Vercel front end and the Arm backend rehearsal (2026-10-20)
+
+Scope (two owner directives of 2026-10-20, budget ₹0): deploy the existing front end to Vercel's
+free plan, then move the backend toward an Oracle Cloud *Always Free* Arm host with a DuckDNS
+name and Caddy, without a second architecture and without spending. The front end is live; the
+backend is rehearsed end to end on a fresh Arm VM at the exact commit; the Oracle instance, the
+DNS name and the public certificate are owner inputs and still missing.
+
+| Area | Result |
+|---|---|
+| Vercel front end | project `fpl-copilot` (team `adivishall`, Hobby), root directory `apps/web`, framework Next.js with default build/install/output (`npm run build` → `next build`, 34 packages from the lockfile), Node.js 22.x, production branch `develop` (the import defaulted to `main`; corrected), one variable `FPL_PRODUCT_NAME=Fanchart` (Production and Preview). Deployments from `develop` at `25b9aa4`: 9n3qbnxFq (41 s, first import on Node 24) and ENuGQbfdD (37 s, redeploy on Node 22). **https://fpl-copilot-alpha.vercel.app** (the deployment-specific and branch URLs are behind Vercel's login by default): HTTPS with HSTS, nosniff, `X-Frame-Options: DENY` and referrer policy from `next.config.ts`, HTTP → HTTPS `308`, `<title>Fanchart</title>`, every page `200`, all 8 referenced assets `200`, no horizontal overflow at 375 px or desktop, no key name in the HTML or any JavaScript chunk; `/backend/*` and the sign-in handler answer `502 API unreachable` because no backend variable is set (frontend-only preview by design). Local checks on `25b9aa4`: `tsc`, `next build` (Node 22.23), development browser suite **17/17** (1.8 min, e2e API on local PostgreSQL). Nothing paid, no trial, no card |
+| Phase 1 — what a public backend needs | the runbook's topology unchanged: Postgres 16, Redis 7, `migrate` (one-shot), API, worker, scheduler, web and Caddy on one host; `/data` (snapshots, raw captures, forecasts, feature store) is one named volume mounted by api, worker and scheduler (migrate and web do not need it; backup reads it through `api`, restore writes it through `api`), `pgdata` for PostgreSQL, `caddy_data`/`caddy_config` for certificates — all survive container recreation and reboots; the checkout under `/srv/fpl` stays a runtime dependency only for `.env`, the Caddyfile, `auth.caddy` and the Prometheus rules (bind mounts). Requirements: arm64 or amd64 (every pinned upstream image publishes both: `caddy@sha256:4c6e…`, `postgres:16-alpine`, `redis:7-alpine`, `python:3.12-slim`, `node:22-alpine`, `prom/prometheus:v3.5.0`), 2 vCPUs, ≥ 4 GB (worker forecast peak ~2 GB), ~15 GB disk after a build, inbound 22/80/443, outbound to FPL, GitHub raw, the registries and Let's Encrypt. Conflicts found: the directive's `render.yaml` does not exist; Oracle's own page gives the minimum boot volume as 47 GB and 50 GB in two places; the runbook's "22 flows" is stale (25 today) |
+| Phase 2 — Oracle allowance (official *Always Free Resources* page, read 2026-10-20) | Arm: "the first 1,500 OCPU hours and 9,000 GB hours per month … for Always Free tenancies, this is equivalent to 2 OCPUs and 12 GB of memory" (`VM.Standard.A1.Flex`); 200 GB of block storage including boot volumes and five volume backups; 10 TB/month outbound; Always Free compute and volumes must be in the tenancy's home region; idle instances may be reclaimed after 7 days with CPU (95th percentile), network and memory all under 20 %; "out of host capacity" means a temporary shortage in that domain — retry another availability domain or later. Nothing in the topology needs any other service. Eligibility of the actual tenancy, region capacity and the sign-up checks (card authorisation, possible review) can only be seen in the owner's Console: **Oracle Cloud and DuckDNS are both signed out in the owner's browser; no resource was created** |
+| Change | `infra/deployment/caddy/Caddyfile` (`17a40fd`): `handle /api/v1/* { reverse_proxy api:8000 }` before the catch-all to `web:3000`, so the Vercel front end's server-side proxy (`<FPL_API_INTERNAL_URL>/api/v1/<path>`) can use the host; `/metrics`, `/docs` and `/openapi.json` stay private. `caddy validate` with the pinned image: valid; adapted route order checked. Runbook: *A front end on another host*. No change to Compose, the host script or the application |
+| Phase 3 — rehearsal, fresh VM (Lima/vz, Ubuntu 24.04 arm64 cloud image, 2 CPUs, 6 GB, 30 GB; 2026-10-20 12:32–12:41 UTC) | `host_setup.sh` at `17a40fd` with `FPL_TLS=internal`, `FPL_SKIP_DNS_CHECK=1`, `FPL_PRODUCT_NAME=Fanchart`, unattended: **8 min 37 s** end to end — Docker 29.9.1 + Compose 5.6.0, clone, `.env` with a generated password, images built on two Arm cores in 2 min 50 s (`fpl-engine:17a40fd7963e` 1.2 GB, `fpl-web:17a40fd7963e` 331 MB), both keys generated (operator key root-only, never printed), **migrations to `0009`**, historical ingest 1 min 25 s, snapshot, serving forecast ready in 1 min 48 s, all seven services healthy behind Caddy, daily backup cron, `ufw` 22/80/443. The previous rehearsal VM (`8441eeb`, 2026-10-17) came back healthy after three days off, which also showed restart-on-boot; it was then lost to a full host disk mid-upgrade and replaced by this fresh one |
+| Verification on the VM | schema `0009`; `fpl-worker healthcheck work` and `schedule` ok; non-loopback listeners only 22, 80, 443 (API 8000, web 3000, Postgres 5432, Redis 6379 on 127.0.0.1); through TLS: `/` `200` with the Fanchart title, HTTP → HTTPS `308`, `/api/v1/health` and `/gameweeks/current` `200` without a key (public reads), `/players` `200` with the web key, `POST /auth/login` without a key `401 X-API-Key required`, with the web key `422` (validation, no account), `/managers/{key}/squad` without a key `401`, with the web key and no session `404`, `/metrics` / `/docs` / `/openapi.json` `404` from the web container (not published), `/backend/health` `200`; HSTS, nosniff, DENY, referrer and permissions policies present, no `Server` header. Smoke test from the host through the public origin with TLS verified against Caddy's internal root: **5/5** (health, gameweek, players, models, web incl. HSTS and the `308`). Live data: the first live capture succeeded at 12:38:43, its GW8 snapshot was promoted at 12:42:50 and health reads `ok` after the reboot. Resources at idle: containers ≈ 1.26 GB in total (api 343 MB, scheduler 478 MB, worker 187 MB, web 104 MB, postgres 127 MB, caddy 15 MB, redis 5 MB), host 2.0 GB used of 5.9 GB, disk 13 GB of 29 GB (5.9 GB of it Docker build cache). Backup (`backup.sh`): 51 tables with data, 14.2 MB dump + 10.8 MB data archive, checksums, manifest at `0009` |
+| Production browser suite against the VM (`playwright.prod.config.ts`, `E2E_FPL_ENTRY_ID=1`, a real classic league, internal CA) | three runs, **25 flows: 23 passed, 2 skipped** (the two that need the auxiliary web containers), no flow failed twice: run 1 stopped at flow 6 — the recommendation job failed with `horizon must start at the state's gameweek` because the API promoted the first live snapshot (GW8) at 12:42:50, the second the request was accepted, over the seed snapshot (GW2) the flow had just saved its squad on (defect 65 below; 5 passed, 19 not run); run 2 (stable snapshot) passed flows 1–18 (4.2 min) and stopped at flow 19 with `429 rate limit exceeded`: through one forwarded address the whole suite is one visitor to Caddy, and a burst of deliberately failing requests in flows 13–15 emptied that visitor's 120-a-minute bucket — the limit is a security control and was not changed; run 3, flows 19–25 on their own after the bucket refilled: 5 passed (the real team import 11 s, the real league read through the worker 27 s, picker, error states, `Retry-After` through the proxy) and 2 skipped |
+| Reboot | `limactl stop` + `start`: the VM answered in 27 s, all seven services healthy in 57 s with no action, same serving snapshot, schema `0009`, 3 ready markers, the TLS site `200`, scheduler heartbeat ok |
+| Phases 4–6 | **BLOCKED on the owner**: an Oracle Cloud account/instance, the DuckDNS name and its A record, and the Let's Encrypt e-mail; then `host_setup.sh` on the instance, the public certificate, the smoke test and the browser suite against the real host, and on Vercel the two server-side variables `FPL_API_INTERNAL_URL=https://<site>` and `FPL_API_KEY=<the host's FPL_WEB_API_KEY>` plus a redeploy. Not rehearsed: publicly trusted issuance, external reachability, Oracle's security list and the image's iptables rules on a real instance (the script's block was exercised on 2026-10-17 only) |
+
+CI: [run 39422931929](https://github.com/adivishall/fpl-copilot/actions/runs/39422931929) on `17a40fd` **success** on every job: lint, security, test, optimiser suite, web e2e, containers. The Vercel deployments and the rehearsal above are from `25b9aa4` and `17a40fd` respectively; `develop` is fast-forwarded only after the docs commit's own run is green.
+
+Defect found, not fixed (product work): 65. A stored squad state keeps the gameweek of the
+snapshot it was saved or synced on and nothing advances it when the serving snapshot moves to a
+later gameweek; *Generate* then enqueues a job that fails with `horizon must start at the
+state's gameweek` and the Overview shows the raw error until the squad is synced or saved again
+(`docs/KNOWN_LIMITATIONS.md` §4). Seen on the rehearsal at the seed → live promotion (GW2 → GW8);
+the same mismatch arises at every deadline for a squad not re-synced since.
+
+Decisions: 62. The public proxy always publishes `/api/v1/*` behind the API's own gate rather
+than behind a second switch — it is exactly what the co-located web container calls, and the
+unauthenticated surface is the public reference data. 63. Requests arriving through another
+host's proxy share that host's egress address for rate limiting (Caddy sets `X-Forwarded-For`
+from the connection and drops client-supplied values): accepted for the beta, noted in the
+runbook; per-visitor buckets would need Caddy to trust that proxy's addresses, which Vercel does
+not publish as a fixed set on the free plan.
+
 ## 3. Environment
 
 Apple M4 (10 logical CPUs), 16 GB RAM, macOS 27.0.1; Python 3.12.15 (uv), Node 22.23, PostgreSQL
@@ -629,10 +666,12 @@ Genuinely open items, in priority order (details in the audit and limitations):
 3. ~~Expose league analytics through the API/UI~~ — done in M1.8 (§2k). Still open on that
    path: scoring a Workbench plan against league rivals, automatic re-reads after each
    deadline, head-to-head leagues, a rank or ownership objective.
-4. A public deployment target (VM + TLS reverse proxy; the host script and every owner input
-   are listed in §2i — the host, domain and name are still missing), the browser extension's
-   release ZIP and Chrome Web Store submission (§2i), Alertmanager routing, and archival of
-   raw payloads / live-observation tables (snapshot and cache retention is done).
+4. A public backend (§2l: the front end is live on Vercel, the stack is rehearsed end to end
+   on a fresh Arm VM at `17a40fd`; the Oracle Always Free instance, the DuckDNS name and the
+   publicly trusted certificate are still owner inputs, then the two Vercel variables), the
+   browser extension's release ZIP (§2i), Alertmanager routing, archival of raw payloads /
+   live-observation tables (snapshot and cache retention is done), and **defect 65** (a squad
+   saved before a gameweek rollover breaks *Generate* until re-synced; §2l).
 5. Evaluate the live models on 2026-27 outcomes as the season progresses (first unseen season):
    the forecast record and the evaluation run since M1.5 (§2g); the first formal look needs
    8 final live gameweeks (GW7–14, about 10 December 2026).

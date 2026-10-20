@@ -2,6 +2,20 @@
 
 User-visible behaviour changes (§78). Milestones follow `docs/BUILD_STATUS.md`.
 
+## Deployment — public API route and the Arm rehearsal (2026-10-20)
+
+### Changed
+- The public TLS proxy (`docker-compose.public.yml`, Caddy) now routes `/api/v1/*` to the API
+  container and everything else to the web container, so a front end hosted elsewhere — the
+  Vercel deployment of `apps/web` at https://fpl-copilot-alpha.vercel.app — can use the site
+  as its backend through its server-side proxy. The API's own key gate applies unchanged;
+  `/metrics`, `/docs` and `/openapi.json` stay private (`docs/DEPLOYMENT.md`, *A front end on
+  another host*).
+
+### Known
+- Defect 65: a squad saved before a gameweek rollover makes *Generate recommendation* fail with
+  a raw error until it is synced or saved again (`docs/KNOWN_LIMITATIONS.md` §4).
+
 ## M1.8 — Mini-League room (2026-10-19)
 
 ### Added
