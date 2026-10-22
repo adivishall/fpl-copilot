@@ -32,21 +32,24 @@ function isJsonObjectOrArray(text: string): boolean {
   }
 }
 
-/** Decide what to forward: a JSON answer with any status is the API's own contract; a
- * non-JSON body (error pages, HTML challenges, truncated replies) is replaced by the
- * unavailable error. An empty body is forwarded as-is only for a success (e.g. 204). */
+/** Decide what to forward. The API's own answers pass through unchanged: JSON with any
+ * status, and other media it serves on a success (report charts as SVG). What is replaced by
+ * the unavailable error is what only an intermediary produces: an HTML page (a tunnel, CDN or
+ * proxy error page, a captive portal) at any status, any non-JSON body on a 5xx, a body
+ * declared JSON that does not parse, and an empty body on a non-success. */
 export function classifyUpstream(status: number, contentType: string | null, text: string): UpstreamResult {
   const ct = (contentType ?? "").toLowerCase();
+  const replaced = { status: UNAVAILABLE_STATUS, body: unavailableBody(), contentType: "application/json", replaced: true };
   if (text.trim() === "") {
-    if (status >= 200 && status < 300) return { status, body: "", contentType: "application/json", replaced: false };
-    return { status: UNAVAILABLE_STATUS, body: unavailableBody(), contentType: "application/json", replaced: true };
+    if (status >= 200 && status < 300) return { status, body: "", contentType: ct || "application/json", replaced: false };
+    return replaced;
   }
-  if (ct.includes("application/json") && isJsonObjectOrArray(text)) {
-    return { status, body: text, contentType: "application/json", replaced: false };
+  if (ct.includes("text/html")) return replaced;
+  if (ct.includes("application/json")) {
+    return isJsonObjectOrArray(text) ? { status, body: text, contentType: "application/json", replaced: false } : replaced;
   }
-  if (!ct && isJsonObjectOrArray(text)) {
-    // a JSON body without a declared type (unlikely from the API; tolerated)
-    return { status, body: text, contentType: "application/json", replaced: false };
-  }
-  return { status: UNAVAILABLE_STATUS, body: unavailableBody(), contentType: "application/json", replaced: true };
+  if (!ct && isJsonObjectOrArray(text)) return { status, body: text, contentType: "application/json", replaced: false };
+  // other media (e.g. image/svg+xml from the API's reports) is only legitimate on a success
+  if (status < 500) return { status, body: text, contentType: ct || "application/octet-stream", replaced: false };
+  return replaced;
 }

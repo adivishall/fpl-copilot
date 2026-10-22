@@ -26,6 +26,17 @@ test("an HTML error page from a tunnel or CDN becomes the unavailable error", ()
   }
 });
 
+test("non-JSON media the API serves on a success passes through (report charts)", () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>';
+  const r = classifyUpstream(200, "image/svg+xml", svg);
+  assert.equal(r.replaced, false);
+  assert.equal(r.body, svg);
+  assert.equal(r.contentType, "image/svg+xml");
+  // but not on a server error, and never HTML
+  assert.equal(classifyUpstream(502, "image/svg+xml", svg).replaced, true);
+  assert.equal(classifyUpstream(200, "text/html", "<html>portal</html>").replaced, true);
+});
+
 test("a truncated or non-JSON body declared as JSON is not forwarded", () => {
   const r = classifyUpstream(200, "application/json", '{"players": [');
   assert.equal(r.status, UNAVAILABLE_STATUS);
