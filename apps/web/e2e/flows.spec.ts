@@ -459,7 +459,9 @@ test("an upstream outage is one clear unavailable state with a retry, and the pa
   const down = { status: 502, contentType: "application/json", body: JSON.stringify({ detail: "API unavailable", code: "upstream_unavailable" }) };
   await page.route("**/backend/**", (route) => route.fulfill(down));
   await page.goto("/players");
-  const alert = page.getByRole("alert").first();
+  // the product's own messages only: Next.js keeps an empty role="alert" route announcer
+  const alerts = page.locator("p[role='alert']");
+  const alert = alerts.first();
   await expect(alert).toContainText("unavailable right now");
   await expect(alert).not.toContainText(/<html|Traceback|localhost|:8000|x-api-key/i);
   await expect(page.getByTestId("retry-session")).toBeVisible();
@@ -468,7 +470,7 @@ test("an upstream outage is one clear unavailable state with a retry, and the pa
   await page.getByTestId("retry-session").click();
   await expect(page.getByTestId("retry-session")).toHaveCount(0);
   if (await page.getByTestId("retry").count()) await page.getByTestId("retry").first().click();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(alerts).toHaveCount(0);
   await expect(page.locator("table tbody tr").first()).toBeVisible();
   // a page-level failure after sign-in is retried from its own control
   await page.route("**/backend/players**", (route) => route.fulfill(down));
