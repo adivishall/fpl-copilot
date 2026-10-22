@@ -452,3 +452,26 @@ test("mini-league: following a league shows observed standings apart from the mo
   await expect(page.getByTestId("league-tab-31337")).toHaveCount(0);
   await expect(page.getByTestId("league-tab-4242")).toBeVisible();
 });
+
+test("an upstream outage is one clear unavailable state with a retry, and the page recovers", async ({ page }) => {
+  // the server-side proxy turns any non-JSON upstream answer (a tunnel or CDN error page) into
+  // this body; here the browser is handed it directly, which is all the UI ever sees
+  const down = { status: 502, contentType: "application/json", body: JSON.stringify({ detail: "API unavailable", code: "upstream_unavailable" }) };
+  await page.route("**/backend/**", (route) => route.fulfill(down));
+  await page.goto("/players");
+  const alert = page.getByRole("alert").first();
+  await expect(alert).toContainText("unavailable right now");
+  await expect(alert).not.toContainText(/<html|Traceback|localhost|:8000|x-api-key/i);
+  await expect(page.getByTestId("retry-session")).toBeVisible();
+  await page.unroute("**/backend/**");
+  await page.getByTestId("retry-session").click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator("table tbody tr").first()).toBeVisible();
+  // a page-level failure after sign-in is retried from its own control
+  await page.route("**/backend/players**", (route) => route.fulfill(down));
+  await page.reload();
+  await expect(page.getByTestId("retry")).toBeVisible();
+  await page.unroute("**/backend/players**");
+  await page.getByTestId("retry").click();
+  await expect(page.locator("table tbody tr").first()).toBeVisible();
+});

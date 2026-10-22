@@ -184,9 +184,10 @@ What that publishes is exactly what the web container already calls: the key-gat
 with the public reference reads (`/health`, `/gameweeks`, `/players`, `/models` …) answering
 without a key as they do through the web proxy; manager data still needs a signed-in session
 or an operator key, and `/metrics`, `/docs` and `/openapi.json` are not under `/api/v1` and stay
-private. Rate limits: Caddy sets `X-Forwarded-For` from the connection, so requests arriving
-through another host's proxy count per that proxy's egress address, not per visitor (the
-site's own web container keeps per-visitor buckets).
+private. Rate limits: a signed-in user is always their own bucket (the session is resolved
+before the rate check); anonymous requests arriving through another host's proxy count per
+that proxy's egress address, since Caddy sets `X-Forwarded-For` from the connection (the
+site's own web container keeps per-visitor buckets for anonymous traffic too).
 
 **Host.** One small VM: 2 vCPUs minimum, 4 recommended (`FPL_SOLVER_WORKERS` = vCPUs); 4 GB RAM
 minimum, 8 GB recommended (serving forecast ~2 GB peak in the worker); 30 GB disk; Docker Engine

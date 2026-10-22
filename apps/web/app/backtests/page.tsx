@@ -35,7 +35,7 @@ export default function BacktestLab() {
         ))}
       </div>
       <Card testId="report" wide>
-        <State loading={rep.loading} error={rep.error} />
+        <State loading={rep.loading} error={rep.error} retry={rep.reload} />
         {/* figures are shown where the report references them (no separate list to drift) */}
         {rep.data ? <Markdown text={rep.data.markdown} figure={(f) => apiUrl(`/reports/figures/${encodeURIComponent(f)}`)} /> : null}
       </Card>

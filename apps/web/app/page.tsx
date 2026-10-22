@@ -125,7 +125,7 @@ export default function Home() {
         title={h ? <>Gameweek {h.gameweek} <span className="small">· {h.season}</span></> : "Copilot Home"}
         lede={h ? <>Deadline {when(h.deadline)} · <strong><Countdown iso={h.deadline} /></strong> to go. The recommended action, your squad and its forecasts, with every number&apos;s source.</> : undefined}
       />
-      <State loading={home.loading && !h} error={home.error && !home.error.startsWith("404") ? home.error : null} />
+      <State loading={home.loading && !h} error={home.error && !home.error.startsWith("404") ? home.error : null} retry={home.reload} />
       {a ? (
         <Stats>
           <Stat label="XI expected" value={`${pts(a.totals.xi_xp_next)} pts`} hint="this gameweek (forecast)" testId="stat-xi" />

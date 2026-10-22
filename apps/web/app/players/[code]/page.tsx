@@ -29,7 +29,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ code: strin
     <>
       <FreshnessBanner f={prof.data?.freshness} />
       <h1>{prof.data?.player.web_name ?? code} <span className="small">{prof.data?.player.position} · {money(prof.data?.player.price)}</span></h1>
-      <State loading={prof.loading || fc.loading} error={prof.error ?? fc.error} />
+      <State loading={prof.loading || fc.loading} error={prof.error ?? fc.error} retry={() => { void prof.reload(); void fc.reload(); }} />
       <div className="grid">
         <Card title="Forecast distribution by gameweek" testId="forecast" wide>
           <div className="table-wrap">

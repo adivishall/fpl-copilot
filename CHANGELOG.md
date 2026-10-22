@@ -2,6 +2,24 @@
 
 User-visible behaviour changes (§78). Milestones follow `docs/BUILD_STATUS.md`.
 
+## Reliability hardening (2026-10-22)
+
+### Fixed
+- **Upstream failures are one clear state.** The web server's proxy and its sign-in/sign-up
+  handlers relay only the API's own JSON answers; an error page from a tunnel, CDN or proxy in
+  between, an empty or truncated reply, a connection failure or a timeout becomes
+  `502 {"detail": "API unavailable", "code": "upstream_unavailable"}` — never HTML, upstream
+  addresses or traces. Every page shows "the service is unavailable right now" with a
+  **Try again** control; the session check offers the same; polling stops while the backend is
+  down. The API's own statuses (401, 403, 404, 409, 422, 429 with `Retry-After`, 503 "forecast
+  not ready") pass through unchanged, so authentication errors stay distinguishable.
+- **Rate limits per user behind one key.** Signed-in users are bucketed per user before the
+  rate check; behind the web proxy's key one manager's traffic no longer throttles another's.
+  Forged addresses or session tokens change nothing; operator keys keep their own bucket.
+- **Defect 65.** A squad saved for an earlier gameweek than the serving data is refused by the
+  planning routes with `409` and what to do (sync or save it again), instead of an opaque
+  worker failure shown raw on the Overview.
+
 ## Deployment — public API route and the Arm rehearsal (2026-10-20)
 
 ### Changed

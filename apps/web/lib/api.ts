@@ -8,9 +8,22 @@ const ROOT = API_BASE ? `${API_BASE}/api/v1` : "/backend";
 export const apiUrl = (path: string) => `${ROOT}${path}`;
 
 export class ApiError extends Error {
-  constructor(public status: number, public detail: unknown) {
+  constructor(public status: number, public detail: unknown, public code?: string) {
     super(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
+  /** The backend could not be reached at all (proxy or tunnel failure, timeout, an error page
+   * in between) — as opposed to an answer from the API, whatever its status. */
+  get unavailable(): boolean {
+    return this.code === "upstream_unavailable" || this.status === 502 || this.status === 504;
+  }
+}
+
+/** What to tell the user for an error: infrastructure failures get one steady message. */
+export function describeError(e: unknown): string {
+  if (e instanceof ApiError) {
+    return e.unavailable ? `${e.status}: the service is unavailable right now` : `${e.status}: ${e.message}`;
+  }
+  return String(e);
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -20,7 +33,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (body as { detail?: unknown }).detail ?? body);
+  if (!res.ok) {
+    const b = body as { detail?: unknown; code?: string };
+    throw new ApiError(res.status, b.detail ?? body, typeof b.code === "string" ? b.code : undefined);
+  }
   return body as T;
 }
 

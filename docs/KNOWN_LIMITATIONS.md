@@ -135,15 +135,16 @@ generated reports so they cannot drift from this page.
 * The decision engine's thresholds (`min_gain`, `min_prob_positive`) trade activity for
   stability; plans beyond the first week are provisional (most next-week plans change).
 * The "FPL-style heuristic" baseline is an approximation; the official algorithm is not public.
-* **Defect 65 (open, found on the deployment rehearsal of 2026-10-20).** A stored squad state
-  keeps the gameweek of the snapshot it was saved or synced on, and nothing advances it when
-  the serving snapshot moves to a later gameweek. *Generate recommendation* then accepts the
-  request, and the worker job fails with `horizon must start at the state's gameweek`, which
-  the Overview shows as a raw error until the squad is synced or saved again. Seen when the
-  first live snapshot (GW8) replaced the seed snapshot (GW2) seconds after a squad was saved;
-  the same mismatch arises at every deadline for a squad not re-synced since. Workaround:
-  re-sync (FPL ID) or re-save the squad; the fix (advance the state, or refuse with a clear
-  message and a sync prompt) is product work, not deployment work.
+* **Defect 65 (found 2026-10-20, fixed 2026-10-22).** A stored squad keeps the gameweek of the
+  snapshot it was saved or synced on, and nothing advances it when the serving snapshot moves
+  to a later gameweek; every planning route accepted such a squad and the worker failed with
+  the optimiser's `horizon must start at the state's gameweek`, shown raw on the Overview.
+  Now the planning routes (recommendation, workbench context and evaluation, transfer
+  optimisation, lineup, replacements, chips, scenarios) answer `409` with "your squad was saved
+  for GW n but the data is now at GW m: sync it again from your FPL ID or save it again in the
+  Squad Planner", and a job that still meets one fails with that reason. What remains by
+  design: the squad is not advanced automatically — after each deadline it has to be synced
+  or saved again (the deadline's actual transfers are not known for a manual squad).
 
 ## 4a. Decision journal and outcome evaluation (M1.4)
 
@@ -360,6 +361,14 @@ Contract: `docs/architecture/season-evaluation.md`.
   **Residual risk:** DNS is resolved again by the HTTP client at connect time, so a rebinding
   window exists between validation and connection; the host allow-list is the primary control
   (an attacker would have to control DNS of an allow-listed host).
+* Rate limits (reliability hardening, 2026-10-22): a signed-in user is one bucket (the session
+  is resolved before the rate check), so behind the web proxy's single key one manager's
+  traffic cannot throttle another's. Anonymous traffic through that key — sign-in, sign-up and
+  the public reads — still shares the key's bucket unless the deployment trusts its TLS
+  proxy's `X-Forwarded-For` (`FPL_TRUST_FORWARDED_FOR`); through a tunnel or another host's
+  proxy that address is the proxy's, so an anonymous burst can delay other visitors' sign-in
+  (sign-in attempts are also limited per e-mail address). Client-supplied addresses and
+  invented session tokens never move a caller to a fresh bucket.
 * Audit entries store hashes of manager and API keys. Logs pseudonymise manager keys in
   rejected-request paths, and uvicorn access logs are disabled (both printed raw manager keys
   until M14). Manager keys still appear in job request rows in PostgreSQL until the manager's

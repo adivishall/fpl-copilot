@@ -120,7 +120,7 @@ export default function SquadPlanner() {
       <PageHeader title="Squad Planner" lede="Your stored squad as the lineup optimiser would field it — starting XI, bench order and armband — and where it is kept up to date from." />
       <div className="grid">
         <Card title="Starting XI, bench and armband" testId="lineup">
-          <State loading={squad.loading} error={squad.error && !squad.error.startsWith("404") ? squad.error : null} />
+          <State loading={squad.loading} error={squad.error && !squad.error.startsWith("404") ? squad.error : null} retry={squad.reload} />
           {lineup && st ? (
             <>
               <Pitch

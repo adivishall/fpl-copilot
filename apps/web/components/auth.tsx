@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useState } from "react";
 
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, describeError } from "@/lib/api";
 import { loadSettings, saveSettings } from "@/lib/settings";
 
 export interface Manager {
@@ -62,7 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } else {
         // the API is down, unreachable or refused the server's key: say so, never spin forever
-        setError(e instanceof ApiError ? `${e.status}: ${e.message}` : String(e));
+        setError(describeError(e));
       }
     } finally {
       setLoading(false);
@@ -80,11 +80,19 @@ export function useUser(): AuthState {
 
 /** Renders children only for a signed-in user; public pages render regardless. */
 export function AuthGate({ children }: { children: ReactNode }) {
-  const { user, loading, error } = useUser();
+  const { user, loading, error, reload } = useUser();
   const path = usePathname();
   if (PUBLIC.has(path)) return <>{children}</>;
   if (loading) return <p className="muted" role="status">Checking your session…</p>;
-  if (error) return <p className="error" role="alert">Your session could not be verified: {error}</p>;
+  if (error)
+    return (
+      <p className="error" role="alert">
+        Your session could not be verified: {error}{" "}
+        <button type="button" className="secondary" onClick={() => void reload()} data-testid="retry-session">
+          Try again
+        </button>
+      </p>
+    );
   if (!user) return <p className="muted">Redirecting to sign-in…</p>;
   return <>{children}</>;
 }

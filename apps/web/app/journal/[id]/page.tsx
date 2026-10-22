@@ -42,7 +42,7 @@ export default function JournalEntry({ params }: { params: Promise<{ id: string 
   return (
     <>
       <PageHeader title={<>Recommendation <span className="small">{id}</span></>} lede="The stored recommendation read back through the lineage tables: every stage it depends on, with the integrity checks that link them." />
-      <State loading={rec.loading} error={rec.error} />
+      <State loading={rec.loading} error={rec.error} retry={rec.reload} />
       {tr.data ? (
         <Card title="Traceability (§76.2): read back from the lineage tables" testId="trace" wide>
           <p>
@@ -74,7 +74,7 @@ export default function JournalEntry({ params }: { params: Promise<{ id: string 
           </details>
         </Card>
       ) : (
-        <State loading={tr.loading} error={tr.error} />
+        <State loading={tr.loading} error={tr.error} retry={tr.reload} />
       )}
       {rec.data ? (
         <Card title="Explanation (rendered from stored evidence; immutable record)">

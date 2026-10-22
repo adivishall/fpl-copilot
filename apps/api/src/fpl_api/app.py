@@ -298,6 +298,20 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             raise HTTPException(404, f"no squad stored for '{manager_key}'; POST {API}/squad")
         return got
 
+    def load_current_state(manager_key: str) -> tuple[str, ManagerState]:
+        """The latest stored squad, which must be at the serving snapshot's gameweek: a
+        squad saved before a deadline cannot be planned on data that has moved past it — the
+        optimiser would refuse it in the worker with an opaque error (defect 65)."""
+        sid, st = load_state(manager_key)
+        gw = svc.context().gameweek
+        if st.gameweek != gw:
+            raise HTTPException(
+                409,
+                f"your squad was saved for GW{st.gameweek} but the data is now at GW{gw}: "
+                "sync it again from your FPL ID or save it again in the Squad Planner",
+            )
+        return sid, st
+
     def warm_analysis(manager_key: str, state_id: str) -> None:
         """Queue the Copilot Home analysis for a changed squad so the page is instant. In
         inline mode (no queue) the Home route computes on first read instead."""
@@ -706,7 +720,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     ) -> dict[str, Any]:
         """The squad as the workbench needs it: purchase and selling prices, expectations over
         the served horizon, availability, bank, transfers, chips and current weak spots."""
-        sid, st = load_state(manager_key)
+        sid, st = load_current_state(manager_key)
         ctx = svc.context()
         fc = svc.forecast_for(ctx, settings.horizon_max)
         return {
@@ -721,7 +735,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
         on the current snapshot and forecast, as a job. The same question on the same inputs
         returns the same run instead of a second computation."""
         reference = follow_promotion(svc)  # a promotion is followed before the run is named
-        latest_sid, _ = load_state(body.manager_key)
+        latest_sid, _ = load_current_state(body.manager_key)
         assert svc.states is not None and svc.workbench is not None
         sid = body.state_id or latest_sid
         if body.state_id and svc.states.get(sid, body.manager_key) is None:
@@ -1206,7 +1220,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     @r.post("/optimize")
     @r.post("/optimize/transfer")
     def optimize(body: s.OptimizeIn) -> Any:
-        sid, st = load_state(body.manager_key)
+        sid, st = load_current_state(body.manager_key)
         h = svc.horizon(body.horizon)
         if h > settings.sync_horizon_limit or body.chip_options:
             job = jobs.submit(
@@ -1292,7 +1306,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
 
     @r.post("/lineup")
     def lineup(body: s.LineupIn) -> dict[str, Any]:
-        _, st = load_state(body.manager_key)
+        _, st = load_current_state(body.manager_key)
         ctx = svc.context()
         fc = svc.forecast_for(ctx, 1)
         chip = ChipType(body.chip) if body.chip else None
@@ -1301,7 +1315,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     @r.post("/replacement")
     @r.post("/replacements")
     def replacement(body: s.ReplacementIn) -> dict[str, Any]:
-        _, st = load_state(body.manager_key)
+        _, st = load_current_state(body.manager_key)
         ctx, fc, prob = _problem(st, body.profile, body.horizon)
         full = svc.table(ctx, fc, svc.horizon(body.horizon), st)
         prob = replace(prob, players=full)
@@ -1342,7 +1356,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
 
     @r.post("/chips/simulate")
     def chips(body: s.ChipSimIn) -> dict[str, Any]:
-        _, st = load_state(body.manager_key)
+        _, st = load_current_state(body.manager_key)
         _, fc, prob = _problem(st, "default", body.horizon)
         base = build_and_solve(
             replace(prob, preferences=replace(prob.preferences, hold_first_gw=False))
@@ -1387,7 +1401,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     @r.post("/what-if")
     @r.post("/simulate")
     def scenarios(body: s.WhatIfIn) -> dict[str, Any]:
-        _, st = load_state(body.manager_key)
+        _, st = load_current_state(body.manager_key)
         _, fc, prob = _problem(st, "default", body.horizon)
         hold = build_and_solve(
             replace(prob, preferences=replace(prob.preferences, hold_first_gw=True))
@@ -1451,7 +1465,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     @r.post("/recommendations/generate")
     def generate(body: s.RecommendationIn) -> JSONResponse:
         reference = follow_promotion(svc)  # the job is keyed on the promoted snapshot
-        latest_sid, _ = load_state(body.manager_key)
+        latest_sid, _ = load_current_state(body.manager_key)
         sid = body.state_id or latest_sid
         assert svc.states is not None and svc.recs is not None
         if body.state_id and svc.states.get(sid, body.manager_key) is None:

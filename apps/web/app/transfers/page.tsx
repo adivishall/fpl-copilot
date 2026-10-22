@@ -168,7 +168,7 @@ export default function TransferWorkbench() {
       />
       <div className="grid">
         <Card title="Your squad" testId="wb-squad" wide>
-          <State loading={ctx.loading} error={ctx.error} />
+          <State loading={ctx.loading} error={ctx.error} retry={ctx.reload} />
           {c ? (
             <>
               <p className="small" data-testid="wb-state">

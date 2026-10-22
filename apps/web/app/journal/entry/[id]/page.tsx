@@ -93,7 +93,7 @@ export default function JournalEntryPage({ params }: { params: Promise<{ id: str
   return (
     <>
       <PageHeader title={<>Decision <span className="small">· GW{d?.gameweek ?? ""}</span></>} lede="What you decided, what Copilot recommended and why, the evidence as it was when you decided (never updated), and the outcome once the results are final." />
-      <State loading={e.loading} error={e.error} />
+      <State loading={e.loading} error={e.error} retry={e.reload} />
       {d ? (
         <div className="grid">
           <Card title="Your decision" testId="entry-decision" tone="accent">

@@ -3,6 +3,8 @@
 
 import { type NextRequest } from "next/server";
 
+import { UNAVAILABLE_CODE, UNAVAILABLE_DETAIL, classifyUpstream } from "@/lib/upstream";
+
 export const SESSION_COOKIE = "fpl_session";
 const ORIGIN = process.env.FPL_API_INTERNAL_URL ?? "http://localhost:8000";
 const MAX_AGE_SECONDS = 30 * 24 * 3600; // matches the API's default session lifetime
@@ -35,13 +37,14 @@ export async function apiAuth(path: string, body: string, session?: string, forw
     const down = Response.json({ detail: "API unreachable" }, { status: 502 });
     return { ok: false, status: 502, json: {}, passthrough: down };
   }
-  const text = await res.text();
-  let json: Record<string, unknown> = {};
-  try {
-    json = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    json = { detail: text };
+  // only the API's own JSON answers are relayed; an error page from a tunnel, CDN or proxy
+  // is an infrastructure failure, reported as such and never shown raw
+  const verdict = classifyUpstream(res.status, res.headers.get("content-type"), await res.text());
+  if (verdict.replaced) {
+    const down = Response.json({ detail: UNAVAILABLE_DETAIL, code: UNAVAILABLE_CODE }, { status: verdict.status });
+    return { ok: false, status: verdict.status, json: {}, passthrough: down };
   }
+  const json = (verdict.body ? JSON.parse(verdict.body) : {}) as Record<string, unknown>;
   // never forward the session token to the browser: the passthrough carries only the error
   const safe = res.ok ? { user: json.user } : json;
   const passthrough = new Response(JSON.stringify(safe), {

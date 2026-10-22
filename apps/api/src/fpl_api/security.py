@@ -105,9 +105,26 @@ class Guard:
     def _is_web_key(self, digest: str) -> bool:
         return any(hmac.compare_digest(digest, h) for h in self.settings.web_api_keys_sha256)
 
+    def _session_user(self, request: Request) -> Principal | None:
+        """The signed-in user behind a bearer token, resolved once per request (before the
+        rate check, so every user has their own bucket even behind one web key) and kept on
+        ``request.state`` for the principal check; an absent or invalid token gives None."""
+        cached = getattr(request.state, "principal", None)
+        if isinstance(cached, Principal):
+            return cached if cached.kind == "user" else None
+        if self.users is None:
+            return None
+        token = bearer_token(request)
+        if not token:
+            return None
+        p = self.users.principal(token)
+        if p is not None:
+            request.state.principal = p
+        return p
+
     def client_id(self, request: Request) -> str:
-        principal = getattr(request.state, "principal", None)
-        if isinstance(principal, Principal) and principal.kind == "user" and principal.user_id:
+        principal = self._session_user(request)
+        if principal is not None and principal.user_id:
             return "u:" + principal.user_id[:16]
         key = request.headers.get("x-api-key")
         if key:
@@ -136,6 +153,9 @@ class Guard:
     def principal(self, request: Request) -> Principal:
         """Who is asking: a session token names a user (even alongside an API key); an
         operator key is operations; the web proxy's key alone is an anonymous browser."""
+        cached = getattr(request.state, "principal", None)
+        if isinstance(cached, Principal):
+            return cached  # resolved by the rate check already (same request)
         token = bearer_token(request)
         if token:
             p = self.users.principal(token) if self.users is not None else None

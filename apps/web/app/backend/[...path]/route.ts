@@ -4,6 +4,8 @@
 
 import { type NextRequest } from "next/server";
 
+import { classifyUpstream } from "@/lib/upstream";
+
 const ORIGIN = process.env.FPL_API_INTERNAL_URL ?? "http://localhost:8000";
 const SAFE = /^[A-Za-z0-9_.\-]+$/;
 export const SESSION_COOKIE = "fpl_session";
@@ -52,10 +54,13 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
       { status: timedOut ? 504 : 502 },
     );
   }
-  const out = new Headers({ "content-type": res.headers.get("content-type") ?? "application/json" });
+  // the API answers JSON; an error page from a tunnel, CDN or proxy in between is an
+  // infrastructure failure and becomes one predictable error (never HTML, URLs or traces)
+  const verdict = classifyUpstream(res.status, res.headers.get("content-type"), await res.text());
+  const out = new Headers({ "content-type": verdict.contentType });
   const retry = res.headers.get("retry-after");
-  if (retry) out.set("retry-after", retry);
-  return new Response(await res.arrayBuffer(), { status: res.status, headers: out });
+  if (retry && !verdict.replaced) out.set("retry-after", retry);
+  return new Response(verdict.body === "" ? null : verdict.body, { status: verdict.status, headers: out });
 }
 
 export const GET = forward;

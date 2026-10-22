@@ -6,7 +6,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import { signOut, useUser } from "@/components/auth";
 import { useProductName } from "@/components/product";
-import { ApiError, api, type Freshness } from "@/lib/api";
+import { ApiError, api, describeError, type Freshness } from "@/lib/api";
 import { pct, when } from "@/lib/format";
 
 // Navigation in task groups (M1.6): what to do this gameweek, what to explore, what was
@@ -183,6 +183,7 @@ export function Prob({ p }: { p: number | null | undefined }) {
 export function useApi<T>(path: string | null, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
   // loading from the first render when there is something to load: otherwise the page shows
   // its "nothing here yet" state (e.g. "No recommendation" + Generate) for a frame before the
   // request starts
@@ -193,8 +194,10 @@ export function useApi<T>(path: string | null, deps: unknown[] = []) {
     setError(null);
     try {
       setData(await api<T>(path));
+      setUnavailable(false);
     } catch (e) {
-      setError(e instanceof ApiError ? `${e.status}: ${e.message}` : String(e));
+      setError(describeError(e));
+      setUnavailable(e instanceof ApiError && e.unavailable);
       setData(null);
     } finally {
       setLoading(false);
@@ -204,12 +207,26 @@ export function useApi<T>(path: string | null, deps: unknown[] = []) {
   useEffect(() => {
     void load();
   }, [load]);
-  return { data, error, loading, reload: load };
+  return { data, error, loading, unavailable, reload: load };
 }
 
-export function State(props: { loading?: boolean; error?: string | null; empty?: string }) {
+/** Loading, error (with a retry control when the caller can reload) or empty state. */
+export function State(props: { loading?: boolean; error?: string | null; empty?: string; retry?: () => void }) {
   if (props.loading) return <p className="muted" role="status">Loading…</p>;
-  if (props.error) return <p className="error" role="alert">{props.error}</p>;
+  if (props.error)
+    return (
+      <p className="error" role="alert">
+        {props.error}
+        {props.retry ? (
+          <>
+            {" "}
+            <button type="button" className="secondary" onClick={props.retry} data-testid="retry">
+              Try again
+            </button>
+          </>
+        ) : null}
+      </p>
+    );
   if (props.empty) return <p className="muted">{props.empty}</p>;
   return null;
 }

@@ -21,7 +21,7 @@ export default function FuturePlanner() {
   return (
     <>
       <PageHeader title="Future Planner" lede="The recommended path over the planning horizon: moves, chips and expected points per gameweek, with how stable the first move is under forecast perturbations." />
-      <State loading={rec.loading} error={rec.error} />
+      <State loading={rec.loading} error={rec.error} retry={rec.reload} />
       {r?.lifecycle ? (
         <div data-testid="planner-lifecycle" data-state={r.lifecycle.state}>
           <LifecycleBadge lc={r.lifecycle} testId="planner-lifecycle-badge" />

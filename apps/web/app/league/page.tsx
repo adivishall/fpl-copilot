@@ -145,7 +145,7 @@ export default function LeaguePage() {
       <FreshnessBanner f={view?.freshness} />
       <div className="grid">
         <Card title="Your leagues" testId="league-form" tone="brand">
-          <State loading={list.loading} error={list.error} />
+          <State loading={list.loading} error={list.error} retry={list.reload} />
           {list.data && !list.data.has_squad ? <Callout tone="warn">Import or enter your squad first: the outlook compares your squad with your rivals'.</Callout> : null}
           {list.data && !list.data.live_source ? (
             <Callout tone="warn" testId="league-no-live">The live FPL source is disabled on this deployment, so no league can be read.</Callout>

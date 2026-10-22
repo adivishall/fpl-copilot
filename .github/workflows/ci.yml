@@ -135,7 +135,7 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - working-directory: apps/web
-        run: npm ci && npm run typecheck && npm run build
+        run: npm ci && npm run typecheck && npm run test:unit && npm run build
       - working-directory: apps/web
         run: npx playwright install --with-deps chromium && npx playwright test
       - if: failure()

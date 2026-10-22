@@ -51,6 +51,7 @@ from fpl_api.settings import Settings
 from fpl_api.workbench import compute_workbench
 from fpl_backtest.runner import default_strategies, run_season
 from fpl_domain.hashing import content_hash
+from fpl_domain.state import ManagerState
 from fpl_optimizer.problem import load_optimizer_config
 from fpl_simulation.engine import SimulationConfig
 from fpl_storage import models as m
@@ -88,6 +89,17 @@ def _job_forecast(svc: AppServices, p: dict[str, Any]) -> str:
     return key
 
 
+def require_current_gameweek(svc: AppServices, state: ManagerState) -> None:
+    """A squad saved for an earlier gameweek than the serving snapshot cannot be planned on
+    it (defect 65): fail with the reason instead of the optimiser's horizon error."""
+    gw = svc.context().gameweek
+    if state.gameweek != gw:
+        raise LookupError(
+            f"the squad was saved for GW{state.gameweek} but the data is at GW{gw}: sync it "
+            "again from the FPL ID or save it again before asking for a plan"
+        )
+
+
 def _job_recommendation(svc: AppServices, p: dict[str, Any]) -> str:
     if svc.states is None:
         raise RuntimeError("database required")
@@ -99,6 +111,7 @@ def _job_recommendation(svc: AppServices, p: dict[str, Any]) -> str:
         # Never substitute another state for the one the request named (it may have been
         # erased since): the result would be traced to a squad that was not evaluated.
         raise LookupError(f"squad state {state_id} is not available for {p['manager_key']}")
+    require_current_gameweek(svc, state)
     rec_id, _ = build_recommendation(
         svc,
         p["manager_key"],
@@ -190,7 +203,9 @@ def _job_workbench(svc: AppServices, p: dict[str, Any]) -> str:
     try:
         # exactly the snapshot (and so the forecast) the run names — a worker may already
         # have loaded a newer export that the API has not promoted
-        payload = compute_workbench(svc.at_snapshot(run["snapshot_id"]), run, state)
+        pinned = svc.at_snapshot(run["snapshot_id"])
+        require_current_gameweek(pinned, state)
+        payload = compute_workbench(pinned, run, state)
     except Exception as exc:
         svc.workbench.fail(run["id"], f"{type(exc).__name__}: {exc}")
         raise

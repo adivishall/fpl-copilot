@@ -39,7 +39,7 @@ export default function Alerts() {
       <Card testId="alerts">
         <button onClick={evaluate} data-testid="evaluate-alerts">Evaluate now</button>{" "}
         {msg ? <span role="status" data-testid="alerts-msg">{msg}</span> : null}
-        <State loading={n.loading} error={n.error} empty={n.data && !items.length ? "No alerts — nothing material has changed." : undefined} />
+        <State loading={n.loading} error={n.error} retry={n.reload} empty={n.data && !items.length ? "No alerts — nothing material has changed." : undefined} />
         <ul className="alerts">
           {items.map((a) => (
             <li key={a.id} className={a.read_at ? "read" : ""}>

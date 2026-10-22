@@ -286,7 +286,7 @@ export default function SeasonReview() {
         title="Season Review"
         lede="How this season's live forecasts are doing, judged only on official results that are final, against forecasts frozen before kickoff. Each part says what evidence it is; they are never combined into one score."
       />
-      <State loading={r.loading} error={r.error} />
+      <State loading={r.loading} error={r.error} retry={r.reload} />
       {d ? (
         <>
           <Stats>

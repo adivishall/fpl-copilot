@@ -26,7 +26,7 @@ export default function DataHealth() {
       <PageHeader title="Data Health" lede="Whether the data behind every number is fresh and every service is reachable, and the model gates — checked on past seasons, never on this season's live forecasts." />
       <div className="grid">
         <Card title="Services" testId="services">
-          <State loading={h.loading} error={h.error} />
+          <State loading={h.loading} error={h.error} retry={h.reload} />
           {h.data ? (
             <div className="table-wrap">
             <table>
@@ -60,7 +60,7 @@ export default function DataHealth() {
           ))}
         </Card>
         <Card title="Data-quality incidents" wide>
-          <State loading={dq.loading} error={dq.error} empty={dq.data && !dq.data.events.length ? "No incidents recorded in this database (ingestion quality gates run in the data pipeline; see docs/DATA_DICTIONARY.md)." : undefined} />
+          <State loading={dq.loading} error={dq.error} retry={dq.reload} empty={dq.data && !dq.data.events.length ? "No incidents recorded in this database (ingestion quality gates run in the data pipeline; see docs/DATA_DICTIONARY.md)." : undefined} />
           <div className="table-wrap">
           <table>
             <tbody>

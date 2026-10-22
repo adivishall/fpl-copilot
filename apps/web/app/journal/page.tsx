@@ -117,7 +117,7 @@ export default function Journal() {
         ) : null}
       </Card>
       <Card title="Recommendations" testId="journal">
-        <State loading={j.loading} error={j.error} empty={j.data && !j.data.journal.length ? "No recommendations yet." : undefined} />
+        <State loading={j.loading} error={j.error} retry={j.reload} empty={j.data && !j.data.journal.length ? "No recommendations yet." : undefined} />
         <div className="table-wrap">
         <table>
           <thead><tr><th>Created</th><th>GW</th><th>Action</th><th className="num">Gain vs hold</th><th>Confidence</th><th>Status</th><th>Your decision</th></tr></thead>

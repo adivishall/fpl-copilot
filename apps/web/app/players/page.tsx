@@ -30,7 +30,7 @@ export default function Players() {
         </select>
       </div>
       <Card testId="players">
-        <State loading={res.loading} error={res.error} />
+        <State loading={res.loading} error={res.error} retry={res.reload} />
         <div className="table-wrap">
         <table>
           <thead><tr><th>Player</th><th>Team</th><th>Pos</th><th className="num">Price</th><th>Next GW (p10–p90)</th><th className="num">xP next</th><th className="num">xP {res.data?.horizon ?? ""} GW</th><th className="num">P(start)</th></tr></thead>
