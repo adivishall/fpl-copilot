@@ -145,3 +145,42 @@ def test_abusive_burst_is_refused_and_the_bucket_refills() -> None:
     assert sum(1 for _ in range(100) if bucket.take("u:abuser", now=1061.0)[0]) == 60
     # another caller is untouched throughout
     assert bucket.take("u:other", now=1000.0)[0]
+
+
+def test_concurrent_callers_cannot_overdraw_a_bucket() -> None:
+    """Many threads racing on one bucket get exactly the allowance between them, and a
+    second bucket is untouched by the race."""
+    import threading
+
+    bucket = TokenBucket(rate_per_minute=50)
+    accepted: list[bool] = []
+    lock = threading.Lock()
+
+    def worker() -> None:
+        for _ in range(40):
+            ok, _ = bucket.take("u:racer", now=5000.0)
+            with lock:
+                accepted.append(ok)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(accepted) == 320 and sum(accepted) == 50
+    assert bucket.take("u:bystander", now=5000.0)[0]
+
+
+def test_a_user_who_hits_the_limit_is_told_when_and_everyone_else_proceeds() -> None:
+    guard, _ = make_guard(per_minute=2)
+    alice = {"x-api-key": WEB_KEY, "authorization": "Bearer tok-alice"}
+    for _ in range(2):
+        guard.check_rate(make_request(alice))
+    with pytest.raises(HTTPException) as exc:
+        guard.check_rate(make_request(alice))
+    assert exc.value.status_code == 429
+    assert int(exc.value.headers["Retry-After"]) >= 1
+    # Bob, the anonymous web proxy traffic and an operator all proceed
+    guard.check_rate(make_request({"x-api-key": WEB_KEY, "authorization": "Bearer tok-bob"}))
+    guard.check_rate(make_request({"x-api-key": WEB_KEY}))
+    guard.check_rate(make_request({"x-api-key": OPS_KEY}))

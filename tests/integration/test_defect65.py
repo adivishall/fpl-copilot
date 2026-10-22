@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from fpl_api.container import build_recommendation
 from fpl_api.jobs import _job_recommendation
 from fpl_storage import models as m
 from fpl_storage.db import session_scope
@@ -74,3 +75,33 @@ def test_a_job_that_meets_such_a_squad_fails_with_the_reason_not_a_traceback(
             _job_recommendation(svc, {"manager_key": "demo", "state_id": sid})
     finally:
         _shift_state_gameweek(client, "demo", +1)
+
+
+def test_the_engine_still_raises_the_original_error_so_the_guard_is_what_protects_users(
+    client: TestClient, squad: list[int]
+) -> None:
+    """The original failure (defect 65) is reproduced below the guard: building a recommendation
+    for a state one gameweek behind the serving snapshot raises the optimiser's error, exactly
+    as the worker did before the fix."""
+    svc = client.app.state.services  # type: ignore[attr-defined]
+    sid, state = svc.states.latest("demo")
+    behind = state.model_copy(update={"gameweek": state.gameweek - 1})
+    with pytest.raises(ValueError, match="horizon must start at the state's gameweek"):
+        build_recommendation(svc, "demo", behind, sid, persist=False)
+
+
+def test_boundaries_a_squad_ahead_of_the_data_and_a_missing_squad(
+    client: TestClient, squad: list[int]
+) -> None:
+    gw = client.get("/api/v1/gameweeks/current").json()["gameweek"]
+    _shift_state_gameweek(client, "demo", +1)
+    try:
+        r = client.post("/api/v1/recommendations/generate", json={"manager_key": "demo"})
+        assert r.status_code == 409 and f"saved for GW{gw + 1}" in r.json()["detail"]
+    finally:
+        _shift_state_gameweek(client, "demo", -1)
+    # exactly the serving gameweek is accepted again
+    assert client.post("/api/v1/lineup", json={"manager_key": "demo"}).status_code == 200
+    # no squad at all keeps its own answer (404), not the gameweek message
+    r = client.post("/api/v1/recommendations/generate", json={"manager_key": "nobody-here"})
+    assert r.status_code == 404 and "no squad stored" in r.json()["detail"]
