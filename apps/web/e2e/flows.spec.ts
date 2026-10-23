@@ -538,7 +538,7 @@ test("rival-aware planning: the workbench scores every plan against the league's
   const stored = await (await page.request.get(`/backend/workbench/runs/${runId}`)).json();
   const pinned = stored.request.rivals;
   expect(pinned.perspective).toBe("chase");
-  expect(pinned.rivals.map((r: { entry: number }) => r.entry)).toEqual([900006, 900007]);
+  expect(pinned.rivals.map((r: { entry: number }) => r.entry)).toEqual([900007, 900006]); // nearest first
   expect(stored.rivals_status).toEqual({ stale: false });
   const summary = stored.result.result.rivals;
   expect(summary.ranking.best_by_points).toBeTruthy();
