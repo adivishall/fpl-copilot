@@ -15,8 +15,9 @@ import structlog
 from sqlalchemy import Engine, delete, select, update
 
 from fpl_api.services import CurrentContext
-from fpl_decision.workbench import WORKBENCH_VERSION, PlanSpec, evaluate_plans
+from fpl_decision.workbench import WORKBENCH_VERSION, PlanSpec, RivalInputs, evaluate_plans
 from fpl_domain.hashing import short_id
+from fpl_domain.squad import Lineup
 from fpl_domain.state import ManagerState, with_current_clubs
 from fpl_forecasting.pipeline import Forecast
 from fpl_optimizer.problem import OptimizationProblem, Preferences, load_optimizer_config
@@ -279,6 +280,102 @@ def workbench_problem(
     )
 
 
+MAX_RIVALS = 5
+
+
+def resolve_rivals(
+    row: dict[str, Any] | None, perspective: str, entries: list[int], max_rivals: int
+) -> dict[str, Any]:
+    """Pin the rival selection into a run's request from a followed league's stored read
+    (M1.9): the rivals' public lineups, their ranks and totals, the observed gaps and the
+    read's timestamp. Raises ``ValueError`` with the reason when the league cannot serve it."""
+    if row is None:
+        raise LookupError("this league is not followed by this manager")
+    data = row.get("data") or {}
+    if row.get("status") != "succeeded" or not data.get("rivals") or not data.get("me"):
+        raise ValueError(
+            "the league has no readable standings yet: refresh it on the Mini-League page first"
+        )
+    me = data["me"]
+    my_rank, my_total = int(me["rank"]), int(me["total"])
+    rows = sorted(data["rivals"], key=lambda r: abs(int(r["rank"]) - my_rank))
+    wanted = set(entries)
+    if perspective == "protect":
+        pool = [r for r in rows if int(r["rank"]) > my_rank]
+    elif perspective == "chase":
+        pool = [r for r in rows if int(r["rank"]) < my_rank]
+    else:
+        pool = rows
+        if not wanted:
+            raise ValueError("'selected' needs at least one rival entry id")
+    if wanted:
+        known = {int(r["entry"]) for r in rows}
+        missing = sorted(wanted - known)
+        if missing:
+            raise ValueError(f"not among this league's analysed rivals: {missing}")
+        pool = [r for r in pool if int(r["entry"]) in wanted]
+        if not pool:
+            raise ValueError(f"none of the named rivals is on the '{perspective}' side of you")
+    chosen: list[dict[str, Any]] = []
+    unavailable: list[dict[str, Any]] = []
+    for r in pool:
+        if len(chosen) >= max(1, min(max_rivals, MAX_RIVALS)):
+            break
+        name = f"{r.get('player_name') or ''} ({r.get('entry_name') or r['entry']})".strip()
+        if r.get("lineup"):
+            chosen.append(
+                {
+                    "entry": int(r["entry"]),
+                    "name": name,
+                    "rank": int(r["rank"]),
+                    "total": int(r["total"]),
+                    "points_gap": int(r["total"]) - my_total,
+                    "lineup": r["lineup"],
+                }
+            )
+        else:
+            unavailable.append(
+                {
+                    "entry": int(r["entry"]),
+                    "name": name,
+                    "reason": r.get("unavailable") or "not read",
+                }
+            )
+    if not chosen:
+        raise ValueError(
+            "none of the selected rivals has a readable squad"
+            + (f": {unavailable[0]['reason']}" if unavailable else "")
+        )
+    return {
+        "league_id": int(row["league_id"]),
+        "perspective": perspective,
+        "fetched_at": str(row.get("fetched_at") or data.get("fetched_at") or ""),
+        "my_rank": my_rank,
+        "my_total": my_total,
+        "rivals": chosen,
+        "unavailable": unavailable,
+    }
+
+
+def rival_inputs(request: dict[str, Any]) -> RivalInputs | None:
+    """The engine's view of a pinned rival selection (none when the run has no rivals)."""
+    r = request.get("rivals")
+    if not r:
+        return None
+    return RivalInputs(
+        league_id=int(r["league_id"]),
+        perspective=str(r["perspective"]),
+        lineups={str(x["entry"]): Lineup.model_validate(x["lineup"]) for x in r["rivals"]},
+        gaps={str(x["entry"]): int(x["points_gap"]) for x in r["rivals"]},
+        names={str(x["entry"]): str(x["name"]) for x in r["rivals"]},
+        ranks={str(x["entry"]): int(x["rank"]) for x in r["rivals"]},
+        my_rank=r.get("my_rank"),
+        my_total=r.get("my_total"),
+        fetched_at=str(r.get("fetched_at") or ""),
+        unavailable=list(r.get("unavailable") or []),
+    )
+
+
 def compute_workbench(svc: Any, run: dict[str, Any], st: ManagerState) -> dict[str, Any]:
     """Evaluate a stored run's plans for the state it names (the job body)."""
     ctx = svc.context()
@@ -295,6 +392,7 @@ def compute_workbench(svc: Any, run: dict[str, Any], st: ManagerState) -> dict[s
         svc.data.names(ctx.season),
         svc.data.teams(ctx.season),
         workers=svc.settings.solver_workers,
+        rivals=rival_inputs(run["request"]),
     )
     prov = fc.provenance
     return {

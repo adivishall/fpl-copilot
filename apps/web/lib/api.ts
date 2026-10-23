@@ -590,6 +590,69 @@ export interface WorkbenchPlan {
   lineup: { starters: number[]; bench: number[]; captain: number; vice_captain: number };
   timeline: PlanStep[];
   follow_up: { gameweek: number; out: number[]; in: number[]; chip: string | null; hit_points: number }[];
+  rivals?: RivalPlanMetrics | null; // M1.9: against the selected rivals, on the same samples
+}
+
+// ---------------------------------------------------------------- rival-aware planning (M1.9)
+export interface WorkbenchRivalsIn {
+  league_id: number;
+  perspective: "protect" | "chase" | "selected";
+  entries?: number[];
+  max_rivals?: number;
+}
+
+export interface RivalPlanOutcome {
+  points_gap: number; // observed: the rival's total minus mine before the gameweek
+  p_beat_this_gw: number;
+  p_level_this_gw: number;
+  p_above_after: number;
+  p_level_after: number;
+  diff_mean: number;
+  diff_p10: number;
+  diff_p90: number;
+}
+
+export interface RivalPlanMetrics {
+  per_rival: Record<string, RivalPlanOutcome>;
+  p_above_all_after: number; // one joint event per sample
+  p_above_all_se: number;
+  p_above_all_vs_hold: number;
+  expected_points_1gw: number;
+  n_samples: number;
+}
+
+export interface RivalRanking {
+  best_by_points: string;
+  best_by_rivals: string;
+  agree: boolean;
+  points_cost_of_rival_plan: number;
+  p_gain_of_rival_plan: number;
+  p_gain_se: number;
+  decisive: boolean;
+  explanation: string;
+}
+
+export interface RivalSummary {
+  league_id: number;
+  perspective: string;
+  rivals: { entry: string; name: string; rank: number | null; points_gap: number }[];
+  unavailable: { entry: number; name: string; reason: string }[];
+  fetched_at: string;
+  my_rank: number | null;
+  my_total: number | null;
+  n_samples: number;
+  ranking: RivalRanking | null;
+  note?: string | null;
+}
+
+export interface PinnedRivals {
+  league_id: number;
+  perspective: string;
+  fetched_at: string;
+  my_rank: number;
+  my_total: number;
+  rivals: { entry: number; name: string; rank: number; total: number; points_gap: number }[];
+  unavailable: { entry: number; name: string; reason: string }[];
 }
 
 export interface WorkbenchResult {
@@ -607,6 +670,7 @@ export interface WorkbenchResult {
   ruleset_version: string;
   problem: Record<string, unknown>;
   timings: Record<string, number>;
+  rivals?: RivalSummary | null; // M1.9
 }
 
 export interface WorkbenchRun {
@@ -618,7 +682,7 @@ export interface WorkbenchRun {
   version: string;
   horizon: number;
   profile: string;
-  request: { plans: PlanSpec[]; horizon: number; profile: string; preferences?: WorkbenchPreferences };
+  request: { plans: PlanSpec[]; horizon: number; profile: string; preferences?: WorkbenchPreferences; rivals?: PinnedRivals };
   status: "queued" | "running" | "succeeded" | "failed";
   job_id: string | null;
   result: {
@@ -644,6 +708,7 @@ export interface WorkbenchRun {
   job: { status: string; error: string | null; failure: string | null } | null;
   names: Record<string, string | null>;
   freshness: Freshness;
+  rivals_status?: { stale: boolean; reason?: string; fetched_at?: string | null } | null; // M1.9
 }
 
 // ---------------------------------------------------------------- mini-league room (M1.8)

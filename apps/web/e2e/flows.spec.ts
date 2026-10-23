@@ -480,3 +480,64 @@ test("an upstream outage is one clear unavailable state with a retry, and the pa
   await page.getByTestId("retry").click();
   await expect(page.locator("table tbody tr").first()).toBeVisible();
 });
+
+// ---------------------------------------------------------------- rival-aware planning (M1.9)
+test("rival-aware planning: the workbench scores every plan against the league's rivals on the run's own samples", async ({ page }) => {
+  // the synthetic league (4242, me at rank 8) is followed by the mini-league flow above; make
+  // sure it is, then arrive from the Mini-League page's hand-off
+  await page.goto("/league");
+  const key = JSON.parse((await page.evaluate(() => window.localStorage.getItem("fpl.settings.v1")))!).managerKey as string;
+  const followed = await (await page.request.get(`/backend/leagues?manager_key=${key}`)).json();
+  if (!followed.leagues.some((l: { league_id: number }) => l.league_id === 4242)) {
+    await page.getByTestId("league-id").fill("4242");
+    await page.getByTestId("league-entry").fill("900008");
+    await page.getByTestId("follow-league").click();
+    await expect(page.getByTestId("league-state")).toHaveAttribute("data-state", "succeeded");
+  } else {
+    await page.getByTestId("league-tab-4242").click();
+    await expect(page.getByTestId("league-state")).toHaveAttribute("data-state", "succeeded");
+  }
+  await page.getByTestId("plan-chase").click();
+  await expect(page).toHaveURL(/\/transfers\?league=4242&perspective=chase/);
+  await expect(page.getByTestId("rival-league")).toHaveValue("4242");
+  await expect(page.getByTestId("perspective-chase")).toBeChecked();
+  // the three nearest rivals above me are ticked by default, with the observed gaps
+  const list = page.getByTestId("rival-list");
+  await expect(list).toContainText("You: rank 8");
+  for (const e of [900007, 900006, 900005]) await expect(page.getByTestId(`rival-pick-${e}`)).toBeChecked();
+  await expect(list).toContainText("7 ahead of you");
+  // the lead-protection side lists the rivals below instead
+  await page.getByTestId("perspective-protect").click();
+  await expect(page.getByTestId("rival-pick-900009")).toBeChecked();
+  await expect(list).toContainText("7 behind you");
+  await page.getByTestId("perspective-chase").click();
+  await page.getByTestId("rival-pick-900005").uncheck();
+  await expect(page.getByTestId("wb-rivals")).toContainText("2 rivals");
+  await page.getByTestId("include-ladder").uncheck();
+  await page.getByTestId("evaluate").click();
+  await expect(page.getByTestId("run-status")).toBeVisible();
+  await expect(page.getByTestId("rivals-view")).toBeVisible({ timeout: 240_000 });
+  await expect(page.getByTestId("rivals-observed")).toContainText("rank 8");
+  await expect(page.getByTestId("rivals-observed")).toContainText("ahead of you");
+  await expect(page.getByTestId("rivals-verdict")).toContainText("Best for expected points");
+  await expect(page.getByTestId("rivals-explanation")).toContainText(/agree|standard errors/);
+  await expect(page.getByTestId("rival-plan-hold")).toContainText("baseline");
+  // parity: what the page shows is the run's stored result, nothing computed here
+  const runId = (await page.getByTestId("run-status").textContent())!.match(/Run (\S+)/)![1];
+  const stored = await (await page.request.get(`/backend/workbench/runs/${runId}`)).json();
+  const pinned = stored.request.rivals;
+  expect(pinned.perspective).toBe("chase");
+  expect(pinned.rivals.map((r: { entry: number }) => r.entry)).toEqual([900006, 900007]);
+  expect(stored.rivals_status).toEqual({ stale: false });
+  const summary = stored.result.result.rivals;
+  expect(summary.ranking.best_by_points).toBeTruthy();
+  const hold = stored.result.result.plans[0];
+  expect(hold.rivals.p_above_all_vs_hold).toBe(0);
+  await expect(page.getByTestId("p-all-hold")).toContainText(`${Math.round(100 * hold.rivals.p_above_all_after)}%`);
+  for (const p of stored.result.result.plans) {
+    expect(Object.keys(p.rivals.per_rival).sort()).toEqual(["900006", "900007"]);
+    expect(p.rivals.n_samples).toBe(stored.result.result.n_simulations);
+  }
+  await expect(page.getByTestId("rivals-view")).not.toContainText("undefined");
+  await expect(page.getByTestId("wb-assumptions")).toContainText("rival view");
+});

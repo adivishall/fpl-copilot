@@ -2,6 +2,26 @@
 
 User-visible behaviour changes (§78). Milestones follow `docs/BUILD_STATUS.md`.
 
+## M1.9 — Rival-aware transfer planning (2026-10-23)
+
+### Added
+- **Against your rivals** in the Transfer Workbench: pick a followed league and a perspective —
+  *protect my lead* (the nearest rivals below you) or *chase* (the nearest above) — tick up to
+  five rivals, and every plan of the run (HOLD, your transfer, the engine's replacements, the
+  optimiser's best, the ladder rungs) is scored against them on the same simulation samples:
+  expected points this gameweek, P(above each rival on total points after the gameweek) given
+  the published gap, P(above all of them) as one joint event per sample with its standard
+  error, and P(beating them this gameweek). The run names the best plan for expected points and
+  the best against the rivals, says what choosing the latter costs in expected points, and
+  whether the difference is beyond two standard errors. The Mini-League page links straight
+  into it. Observed standings and modelled probabilities are labelled apart; a rival whose
+  picks could not be read is listed and never estimated; a league read again or dropped marks
+  the run's rival view stale.
+- API: `rivals` on `POST /workbench/evaluate`, `rivals` on every plan and on the result,
+  `rivals_status` on a run (`docs/API.md`, *Rival-aware view*). Library:
+  `fpl_decision.league.plans_vs_rivals`, `rank_vs_rivals`, `joint_above`. No migration: the
+  selection is pinned in the run's request and result.
+
 ## Reliability hardening (2026-10-22)
 
 ### Fixed

@@ -315,3 +315,76 @@ def test_preferences_lock_and_exclude_players_in_every_plan(world: dict) -> None
     assert res.problem["preferences"]["locked"] == [out]
     assert res.problem["preferences"]["banned"] == [inc]
     assert any("preferences apply" in a for a in res.assumptions)
+
+
+def test_rival_view_scores_every_plan_against_rivals_on_the_same_samples(world: dict) -> None:  # type: ignore[type-arg]
+    """M1.9: with rivals pinned, every plan carries paired metrics against each rival, the
+    joint probability is one event per sample, HOLD's own gain is zero, and the ranking names
+    a best-by-points and a best-by-rivals plan among the valid ones."""
+    from fpl_decision.workbench import RivalInputs
+    from fpl_domain.squad import Lineup
+
+    prob, fc = world["prob"], world["fc"]
+    out, inc = _swap(prob)
+    specs = [
+        PlanSpec(kind="transfer", label="swap", sells=[out], buys=[inc]),
+        PlanSpec(kind="best"),
+    ]
+    # two rivals: one holds exactly HOLD's lineup (behind by 2), one HOLD's lineup with the
+    # swap made (ahead by 3) — the first makes HOLD's own outcome against it certain
+    hold_lu = evaluate_plans(prob, fc, specs).plans[0].lineup
+    mine_lu = Lineup(**hold_lu)
+    sw = {
+        k: (
+            [inc if c == out else c for c in v] if isinstance(v, list) else (inc if v == out else v)
+        )
+        for k, v in hold_lu.items()
+    }
+    sw_lu = Lineup(**sw)
+    rivals = RivalInputs(
+        league_id=4242,
+        perspective="selected",
+        lineups={"900001": sw_lu, "900002": mine_lu},
+        gaps={"900001": 3, "900002": -2},
+        names={"900001": "Ahead", "900002": "Behind"},
+        ranks={"900001": 7, "900002": 9},
+        my_rank=8,
+        my_total=400,
+        fetched_at="2026-10-23T00:00:00+00:00",
+        unavailable=[{"entry": 900003, "name": "Silent", "reason": "picks not published"}],
+    )
+    res = evaluate_plans(prob, fc, specs, rivals=rivals)
+    assert res.rivals is not None and res.rivals.league_id == 4242
+    assert [r["entry"] for r in res.rivals.rivals] == ["900001", "900002"]
+    assert res.rivals.unavailable[0]["reason"] == "picks not published"
+    hold = res.plans[0]
+    assert hold.label == "hold" and hold.rivals is not None
+    assert hold.rivals.p_above_all_vs_hold == 0.0
+    assert hold.rivals.n_samples == res.n_simulations
+    n = fc.simulation.n_sims
+    for pl in res.plans:
+        assert pl.rivals is not None, pl.label
+        assert set(pl.rivals.per_rival) == {"900001", "900002"}
+        assert pl.rivals.per_rival["900001"].points_gap == 3
+        assert pl.rivals.expected_points_1gw == pytest.approx(pl.expected_points_1gw)
+        for o in pl.rivals.per_rival.values():
+            assert (
+                0.0 <= o.p_above_after <= 1.0 and o.p_above_after <= o.p_beat_this_gw + 1e-12
+            ) or o.points_gap < 0
+        assert (
+            pl.rivals.p_above_all_after
+            <= min(o.p_above_after for o in pl.rivals.per_rival.values()) + 1e-12
+        )
+        assert pl.rivals.p_above_all_se == pytest.approx(
+            (pl.rivals.p_above_all_after * (1 - pl.rivals.p_above_all_after) / n) ** 0.5
+        )
+    # the rival that is my own squad: HOLD can never finish the gameweek 2 points worse than
+    # itself, so HOLD is above "Behind" with certainty
+    assert hold.rivals.per_rival["900002"].p_above_after == 1.0
+    rk = res.rivals.ranking
+    assert rk is not None
+    valid = {p.label for p in res.plans if p.valid}
+    assert rk.best_by_points in valid and rk.best_by_rivals in valid
+    assert rk.agree == (rk.best_by_points == rk.best_by_rivals)
+    assert any("rival view" in a for a in res.assumptions)
+    assert "rivals" in res.timings

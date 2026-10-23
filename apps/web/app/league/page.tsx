@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge, Callout, Card, FreshnessBanner, PageHeader, PlayerName, Prob, State, useApi } from "@/components/ui";
@@ -225,6 +226,14 @@ export default function LeaguePage() {
                   ) : null}
                   <button className="danger" disabled={busy || pending} onClick={() => void remove()} data-testid="remove-league">Stop following</button>
                 </div>
+                {view.status === "succeeded" && data ? (
+                  <p className="small" data-testid="plan-vs-rivals">
+                    Plan transfers against these rivals in the Workbench:{" "}
+                    <Link href={`/transfers?league=${selected}&perspective=protect`} data-testid="plan-protect">protect your lead</Link>
+                    {" · "}
+                    <Link href={`/transfers?league=${selected}&perspective=chase`} data-testid="plan-chase">chase the rivals above you</Link>
+                  </p>
+                ) : null}
               </>
             ) : null}
           </Card>

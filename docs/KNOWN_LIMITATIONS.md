@@ -229,6 +229,34 @@ Design and methodology: `docs/architecture/decision-journal.md`.
   them; they are stored only for the manager who follows the league and deleted with it (see
   `docs/DEPLOYMENT.md` → *Privacy operations*).
 
+## 4a-ter. Rival-aware transfer planning (M1.9)
+
+* **What is observed and what is modelled.** Ranks, totals and the points gaps are FPL's
+  published standings at the read the run pins (`fetched_at`); a rival's squad is their public
+  picks of the latest passed deadline. Every probability is the serving forecast's joint
+  simulation for the coming gameweek only, with both sides scored on the same samples.
+* **Rivals do not move.** No transfer, hit or chip is assumed for any rival; their lineup,
+  captain and bench order are the ones read. A rival who makes transfers before the deadline
+  is modelled with their old squad — the page says so and nothing is guessed.
+* **P(above after) is not a rank projection.** It is the chance of being above *that* rival on
+  total points after this gameweek given the current gap; "above all" is the joint event per
+  sample. Nothing is said about other managers in the league, later gameweeks or final rank.
+* **One objective per view.** The same probability serves both perspectives: it rewards upside
+  when the manager is behind (chase) and robustness when ahead (protect); no separate risk
+  preference or utility is assumed, and the expected-points recommendation is unchanged.
+* **Sampling noise is reported, not hidden.** Each probability carries one standard error, and
+  the ranking's trade-off its exact paired standard error; a difference within two standard
+  errors is labelled as not separable. With the production forecast's 1,000 samples the
+  standard error of a probability near 50 % is about 1.6 percentage points.
+* **Unavailable rivals stay unavailable.** A rival whose picks could not be read is listed with
+  the reason and excluded from every figure; the run refuses (`422`) when no selected rival
+  has a readable squad.
+* **Freshness.** The run pins the league read it used; when the league is read again or
+  dropped, the run is flagged `rivals_status.stale` and the Workbench shows it. The forecast
+  and squad-state staleness rules of the Workbench apply unchanged.
+* Not done: head-to-head leagues, scoring beyond the next gameweek, automatic re-evaluation
+  after a league refresh, and a combined objective (points and rivals in one number).
+
 ## 4b. Season Review and the live record (M1.5)
 
 Contract: `docs/architecture/season-evaluation.md`.

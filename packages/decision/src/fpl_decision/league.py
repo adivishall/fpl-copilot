@@ -198,3 +198,166 @@ def plan_choice_vs_rival(plans: Mapping[str, np.ndarray], rival: np.ndarray) -> 
         for k, v in plans.items()
     ]
     return pd.DataFrame(rows).sort_values("mean_points", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- rival-aware plans (M1.9)
+
+
+class RivalPlanOutcome(BaseModel):
+    """One plan against one rival, paired sample by sample on the joint simulation: the
+    observed gap is data (their total minus mine before the gameweek); every probability is
+    the model's for the coming gameweek only."""
+
+    points_gap: int
+    p_beat_this_gw: float  # P(my gameweek points with this plan > the rival's)
+    p_level_this_gw: float
+    p_above_after: float  # P(my points − theirs > gap): above them on totals after the gameweek
+    p_level_after: float
+    diff_mean: float  # my gameweek points − theirs: mean and 80 % band
+    diff_p10: float
+    diff_p90: float
+
+
+class RivalPlanMetrics(BaseModel):
+    """One plan against every selected rival. ``p_above_all_after`` is the joint probability,
+    on the same samples, that the plan ends the gameweek above *all* of them (one event per
+    sample, not a product of marginals); ``se`` is its binomial standard error."""
+
+    per_rival: dict[str, RivalPlanOutcome]
+    p_above_all_after: float
+    p_above_all_se: float
+    p_above_all_vs_hold: float  # minus HOLD's joint probability (paired on the same samples)
+    expected_points_1gw: float  # the plan's expected gameweek points, net of hits
+    n_samples: int
+
+
+class RivalRanking(BaseModel):
+    """Which plan is best for expected points and which for the rival objective, and what
+    choosing the rival-aware plan gives up — all from the same evaluation."""
+
+    best_by_points: str
+    best_by_rivals: str
+    agree: bool
+    points_cost_of_rival_plan: float  # E[points] of best_by_points − E[points] of best_by_rivals
+    p_gain_of_rival_plan: float  # p_above_all(best_by_rivals) − p_above_all(best_by_points)
+    p_gain_se: float  # standard error of that paired difference
+    decisive: bool  # the difference exceeds two standard errors
+    explanation: str
+
+
+def joint_above(
+    points: np.ndarray, rival_points: Mapping[str, np.ndarray], gaps: Mapping[str, int]
+) -> np.ndarray:
+    """Per sample: my points with this plan put me above every selected rival on totals."""
+    ok = np.ones(len(points), dtype=bool)
+    for name, rp in rival_points.items():
+        ok &= (points - rp) > int(gaps.get(name, 0))
+    return ok
+
+
+def plans_vs_rivals(
+    plan_points: Mapping[str, np.ndarray],
+    rival_points: Mapping[str, np.ndarray],
+    gaps: Mapping[str, int],
+    hold_label: str = "hold",
+) -> dict[str, RivalPlanMetrics]:
+    """``plan_points[label]`` are a plan's gameweek points per sample, net of its hit;
+    ``rival_points[name]`` a rival's on the same samples. Every plan is scored against every
+    rival pairwise, and jointly against all of them."""
+    if hold_label not in plan_points:
+        raise ValueError(f"the HOLD plan ({hold_label!r}) must be among the plans")
+    if not rival_points:
+        raise ValueError("at least one rival with a known squad is needed")
+    n = len(plan_points[hold_label])
+    for arr in (*plan_points.values(), *rival_points.values()):
+        if len(arr) != n:
+            raise ValueError("every plan and rival must be scored on the same samples")
+    hold_all = joint_above(plan_points[hold_label], rival_points, gaps).mean()
+    out: dict[str, RivalPlanMetrics] = {}
+    for label, mine in plan_points.items():
+        per: dict[str, RivalPlanOutcome] = {}
+        for name, rp in rival_points.items():
+            diff = mine - rp
+            gap = int(gaps.get(name, 0))
+            per[name] = RivalPlanOutcome(
+                points_gap=gap,
+                p_beat_this_gw=float((diff > 0).mean()),
+                p_level_this_gw=float((diff == 0).mean()),
+                p_above_after=float((diff > gap).mean()),
+                p_level_after=float((diff == gap).mean()),
+                diff_mean=float(diff.mean()),
+                diff_p10=float(np.percentile(diff, 10)),
+                diff_p90=float(np.percentile(diff, 90)),
+            )
+        p_all = float(joint_above(mine, rival_points, gaps).mean())
+        out[label] = RivalPlanMetrics(
+            per_rival=per,
+            p_above_all_after=p_all,
+            p_above_all_se=float(np.sqrt(p_all * (1.0 - p_all) / n)) if n else 0.0,
+            p_above_all_vs_hold=p_all - float(hold_all),
+            expected_points_1gw=float(mine.mean()),
+            n_samples=n,
+        )
+    return out
+
+
+def rank_vs_rivals(
+    metrics: Mapping[str, RivalPlanMetrics],
+    plan_points: Mapping[str, np.ndarray],
+    rival_points: Mapping[str, np.ndarray],
+    gaps: Mapping[str, int],
+    eligible: Sequence[str],
+    rival_names: Mapping[str, str] | None = None,
+) -> RivalRanking:
+    """Among ``eligible`` plans (the valid ones): the best by expected points and the best by
+    P(above all selected rivals after the gameweek), ties broken by the other criterion, and
+    the paired trade-off between them with its exact standard error (the per-sample
+    difference of the two joint indicators)."""
+    if not eligible:
+        raise ValueError("no eligible plan to rank")
+    by_pts = max(
+        eligible, key=lambda k: (metrics[k].expected_points_1gw, metrics[k].p_above_all_after)
+    )
+    by_riv = max(
+        eligible, key=lambda k: (metrics[k].p_above_all_after, metrics[k].expected_points_1gw)
+    )
+    cost = metrics[by_pts].expected_points_1gw - metrics[by_riv].expected_points_1gw
+    gain = metrics[by_riv].p_above_all_after - metrics[by_pts].p_above_all_after
+    se = 0.0
+    if by_pts != by_riv:
+        d = joint_above(plan_points[by_riv], rival_points, gaps).astype(float) - joint_above(
+            plan_points[by_pts], rival_points, gaps
+        ).astype(float)
+        se = float(d.std(ddof=1) / np.sqrt(len(d))) if len(d) > 1 else 0.0
+    decisive = by_pts != by_riv and gain > 2 * se
+    names = rival_names or {}
+    who = ", ".join(names.get(k, k) for k in rival_points) or "the selected rivals"
+    if by_pts == by_riv:
+        text = (
+            f"'{by_riv}' is the best plan for expected points and also the most likely to "
+            f"finish the gameweek above {who}: the two objectives agree."
+        )
+    elif decisive:
+        text = (
+            f"'{by_riv}' is more likely to finish above {who} than the best plan for expected "
+            f"points ('{by_pts}'): {gain:+.1%} on the joint probability for {cost:.1f} expected "
+            f"points less this gameweek. The difference is larger than two standard errors of "
+            f"the paired estimate ({se:.1%}), so it is not sampling noise."
+        )
+    else:
+        text = (
+            f"'{by_riv}' scores higher than '{by_pts}' on finishing above {who} ({gain:+.1%} on "
+            f"the joint probability for {cost:.1f} expected points less), but the difference is "
+            f"within two standard errors of the paired estimate ({se:.1%}): the samples cannot "
+            f"separate the two plans on this objective."
+        )
+    return RivalRanking(
+        best_by_points=by_pts,
+        best_by_rivals=by_riv,
+        agree=by_pts == by_riv,
+        points_cost_of_rival_plan=float(cost),
+        p_gain_of_rival_plan=float(gain),
+        p_gain_se=se,
+        decisive=decisive,
+        explanation=text,
+    )

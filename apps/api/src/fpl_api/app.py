@@ -79,7 +79,7 @@ from fpl_api.season import timeline as season_timeline
 from fpl_api.security import Guard, hash_key, loggable_path
 from fpl_api.services import ForecastUnavailable, sources_config
 from fpl_api.settings import Settings
-from fpl_api.workbench import workbench_context
+from fpl_api.workbench import resolve_rivals, workbench_context
 from fpl_decision.chips import plan_chips
 from fpl_decision.paired import paired_gain, plan_samples
 from fpl_decision.replacement import find_replacements
@@ -678,7 +678,22 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
                 codes.update(int(c) for c in pl.get(k, []))
         names = svc.data.names(svc.context().season)
         lc = run_lifecycle(run)
+        rivals_stale: dict[str, Any] | None = None
+        pinned = (run.get("request") or {}).get("rivals")
+        if pinned and svc.leagues is not None:  # M1.9: is the league read still the one used?
+            current = svc.leagues.get(run["manager_key"], int(pinned["league_id"]))
+            if current is None:
+                rivals_stale = {"stale": True, "reason": "the league is no longer followed"}
+            elif str(current.get("fetched_at") or "") != str(pinned.get("fetched_at") or ""):
+                rivals_stale = {
+                    "stale": True,
+                    "reason": "the league was read again since this run",
+                    "fetched_at": current.get("fetched_at"),
+                }
+            else:
+                rivals_stale = {"stale": False}
         return {
+            "rivals_status": rivals_stale,
             **run,
             "stale_state": bool(latest_id and run["state_id"] != latest_id),
             "latest_state_id": latest_id,
@@ -759,6 +774,17 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
                 "locked": sorted(set(body.preferences.locked)),
                 "banned": sorted(set(body.preferences.banned)),
             }
+        if body.rivals is not None:  # M1.9: pin the rivals as read, for this manager only
+            assert svc.leagues is not None
+            row = svc.leagues.get(body.manager_key, body.rivals.league_id)
+            try:
+                request["rivals"] = resolve_rivals(
+                    row, body.rivals.perspective, body.rivals.entries, body.rivals.max_rivals
+                )
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         run, compute = svc.workbench.create(
             body.manager_key,
             sid,

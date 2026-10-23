@@ -36,10 +36,17 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fpl_decision.engine import GainSummary, PlanStep, summarise_option
+from fpl_decision.league import (
+    RivalPlanMetrics,
+    RivalRanking,
+    lineup_points,
+    plans_vs_rivals,
+    rank_vs_rivals,
+)
 from fpl_decision.paired import plan_samples
 from fpl_decision.replacement import shortlist_replacements
 from fpl_domain.rules import Ruleset
-from fpl_domain.squad import SquadPick, club_allowance, squad_violations
+from fpl_domain.squad import Lineup, SquadPick, club_allowance, squad_violations
 from fpl_domain.state import ManagerState
 from fpl_forecasting.pipeline import Forecast
 from fpl_optimizer.alternatives import PlanOption, hold_problem, solve_with_alternatives
@@ -128,6 +135,42 @@ class PlanEvaluation(BaseModel):
     lineup: dict[str, Any]
     timeline: list[PlanStep]
     follow_up: list[dict[str, Any]]  # moves the plan makes in later gameweeks
+    rivals: RivalPlanMetrics | None = None  # M1.9: against the selected rivals, same samples
+
+
+class RivalInputs(BaseModel):
+    """The selected rivals as read from the followed league (M1.9): their public lineups of
+    the latest passed deadline and the observed points gaps, pinned with the read they came
+    from. Nothing is estimated for a rival without a known lineup; such rivals are listed in
+    ``unavailable`` and never scored."""
+
+    model_config = ConfigDict(frozen=True)
+
+    league_id: int
+    perspective: str  # protect | chase | selected
+    lineups: dict[str, Lineup]  # keyed by the rival's FPL entry id
+    gaps: dict[str, int]  # their total minus mine before the gameweek
+    names: dict[str, str] = Field(default_factory=dict)
+    ranks: dict[str, int] = Field(default_factory=dict)
+    my_rank: int | None = None
+    my_total: int | None = None
+    fetched_at: str  # when the league was read (the data version these numbers rest on)
+    unavailable: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RivalSummary(BaseModel):
+    """What the rival-aware view rests on and what it concludes (M1.9)."""
+
+    league_id: int
+    perspective: str
+    rivals: list[dict[str, Any]]  # entry, name, rank, total, points_gap — observed data
+    unavailable: list[dict[str, Any]]
+    fetched_at: str
+    my_rank: int | None
+    my_total: int | None
+    n_samples: int
+    ranking: RivalRanking | None  # None when no valid plan could be ranked
+    note: str | None = None
 
 
 class WorkbenchResult(BaseModel):
@@ -145,6 +188,7 @@ class WorkbenchResult(BaseModel):
     ruleset_version: str
     problem: dict[str, Any]  # OptimizationProblem.describe() of the evaluated pool
     timings: dict[str, float]
+    rivals: RivalSummary | None = None  # M1.9
 
 
 @dataclass
@@ -350,10 +394,13 @@ def evaluate_plans(
     names: dict[int, str] | None = None,
     teams: dict[int, str] | None = None,
     workers: int = 1,
+    rivals: RivalInputs | None = None,
 ) -> WorkbenchResult:
     """``prob`` holds the full player universe (every owned player and every player with a
     forecast); plans are solved on the candidate pool plus every player a plan names. ``workers``
-    solves independent plans in parallel processes; the result does not depend on it."""
+    solves independent plans in parallel processes; the result does not depend on it.
+    ``rivals`` adds the rival-aware view (M1.9): every plan's first-gameweek points, net of its
+    hit, against each selected rival's lineup on the same samples."""
     t0 = time.perf_counter()
     names, teams = names or {}, teams or {}
     cfg, st, rs = prob.config, prob.state, prob.ruleset
@@ -451,9 +498,11 @@ def evaluate_plans(
         n_fix[(c, g)] = n_fix.get((c, g), 0) + 1
     hold_s = plan_samples(fc.simulation, hold.plans, positions, rs)
     plans: list[PlanEvaluation] = []
+    first_gw_points: dict[str, Any] = {}  # label → [S] net points this gameweek (M1.9)
     for r, _p, opt in options:
         sol = opt.solution
         samples = plan_samples(fc.simulation, sol.plans, positions, rs)
+        first_gw_points[r.label] = samples[:, 0]
         summ = summarise_option(opt, samples, hold_s, cfg, n_fix)
         first = sol.first
         hit_cost = sol.total_hits - hold.total_hits
@@ -510,6 +559,13 @@ def evaluate_plans(
             )
         )
     timings["simulate"] = time.perf_counter() - t2
+    rival_summary = None
+    if rivals is not None:
+        t3 = time.perf_counter()
+        rival_summary = _score_vs_rivals(
+            rivals, fc, prob.gameweeks[0], positions, rs, plans, first_gw_points
+        )
+        timings["rivals"] = time.perf_counter() - t3
     hold_plan, rest = plans[0], plans[1:]
     rest.sort(key=lambda e: (not e.valid, -e.objective_gain_vs_hold, -e.gain_horizon.mean))
     prov = fc.provenance
@@ -548,9 +604,72 @@ def evaluate_plans(
                 if (base.preferences.locked or base.preferences.banned)
                 else []
             ),
+            *(
+                [
+                    "rival view: each rival's squad is the public one of the latest passed "
+                    "deadline, scored on the same samples as your plans for this gameweek "
+                    "only; the points gaps are the published totals; no transfer, hit or chip "
+                    "is assumed for any rival, and a rival whose picks could not be read is "
+                    "never estimated",
+                    "P(above after) is the modelled chance of being above a rival on total "
+                    "points after this gameweek, not a rank projection; 'above all' is one "
+                    "joint event per sample, not a product of the per-rival chances",
+                ]
+                if rivals is not None
+                else []
+            ),
         ],
         config_ref=cfg.config_ref or cfg.profile,
         ruleset_version=rs.ruleset_version,
         problem=base.describe(),
         timings=timings,
+        rivals=rival_summary,
     )
+
+
+def _score_vs_rivals(
+    rivals: RivalInputs,
+    fc: Forecast,
+    gw: int,
+    positions: Any,
+    rs: Ruleset,
+    plans: list[PlanEvaluation],
+    first_gw_points: dict[str, Any],
+) -> RivalSummary:
+    """Attach the paired rival metrics to every plan and rank the valid ones (M1.9)."""
+    rows = [
+        {
+            "entry": k,
+            "name": rivals.names.get(k, k),
+            "rank": rivals.ranks.get(k),
+            "points_gap": int(rivals.gaps.get(k, 0)),
+        }
+        for k in rivals.lineups
+    ]
+    base: dict[str, Any] = {
+        "league_id": rivals.league_id,
+        "perspective": rivals.perspective,
+        "rivals": rows,
+        "unavailable": list(rivals.unavailable),
+        "fetched_at": rivals.fetched_at,
+        "my_rank": rivals.my_rank,
+        "my_total": rivals.my_total,
+        "n_samples": int(fc.simulation.n_sims),
+    }
+    if not rivals.lineups:
+        return RivalSummary(
+            **base, ranking=None, note="none of the selected rivals has a readable squad"
+        )
+    rival_pts = {
+        k: lineup_points(fc.simulation, lu, gw, positions, rs) for k, lu in rivals.lineups.items()
+    }
+    metrics = plans_vs_rivals(first_gw_points, rival_pts, rivals.gaps)
+    for pl in plans:
+        pl.rivals = metrics.get(pl.label)
+    eligible = [pl.label for pl in plans if pl.valid]
+    if not eligible:
+        return RivalSummary(**base, ranking=None, note="no valid plan to rank")
+    ranking = rank_vs_rivals(
+        metrics, first_gw_points, rival_pts, rivals.gaps, eligible, rivals.names
+    )
+    return RivalSummary(**base, ranking=ranking)

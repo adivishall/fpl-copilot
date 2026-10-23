@@ -233,6 +233,39 @@ candidates were screened. Status flow: `queued` → `running` → `succeeded` | 
 (`error`, retry by evaluating again); `stale_state` when the manager saved a newer squad,
 `stale_snapshot` when the data snapshot moved on — the run is never silently replaced.
 
+### Rival-aware view (M1.9)
+
+`POST /workbench/evaluate` takes an optional `rivals`: `league_id` (a league this manager
+follows), `perspective` (`protect`: the nearest analysed rivals *below* the manager, `chase`:
+the nearest *above*, `selected`: exactly `entries`), optional `entries` (FPL entry ids, ≤ 5;
+they narrow the first two perspectives) and `max_rivals` (1–5, default 3). The selection is
+resolved when the run is created and **pinned into the run's request**: each rival's public
+lineup of the latest passed deadline, rank, total and `points_gap` (their total minus the
+manager's — observed data), `my_rank`, `my_total` and the league read's `fetched_at`; rivals
+whose picks could not be read are listed under `unavailable` with the reason and are never
+estimated. A different selection is a different run. `404` when the league is not followed by
+this manager, `422` when the league has no readable standings, when `selected` names nobody,
+when an entry is not among the league's analysed rivals, when none of the named rivals is on
+the asked side, or when no selected rival has a readable squad.
+
+In the result every plan (HOLD included) carries `rivals`: `per_rival[entry]` with
+`points_gap`, `p_beat_this_gw` = P(the plan's gameweek points, net of its hit, exceed the
+rival's), `p_level_this_gw`, `p_above_after` = P(plan points − rival points > points_gap), i.e.
+above them on total points after this gameweek, `p_level_after`, and the paired difference's
+`diff_mean` / `diff_p10` / `diff_p90`; `p_above_all_after` = P(above **every** selected rival
+after the gameweek), one joint event per simulation sample (not a product of the per-rival
+chances), with its binomial `p_above_all_se` and `p_above_all_vs_hold`; `expected_points_1gw`;
+`n_samples`. Every figure uses the same samples as the plan's gain against HOLD, for this
+gameweek only; no transfer, hit or chip is assumed for any rival. `result.result.rivals`
+restates the pinned selection and gives `ranking`: `best_by_points` and `best_by_rivals` among
+the valid plans (ties broken by the other criterion), `agree`, `points_cost_of_rival_plan`
+(E[points] of the first minus the second), `p_gain_of_rival_plan` with the exact paired
+standard error `p_gain_se` (the per-sample difference of the two joint indicators),
+`decisive` (gain > 2 × SE) and a plain-language `explanation`. `GET /workbench/runs/{id}`
+adds `rivals_status`: `{stale: false}`, or `stale: true` with the reason when the league was
+read again since the run or is no longer followed (the stored numbers are unchanged). The
+plain evaluation without `rivals` is byte-for-byte what it was.
+
 ## Mini-league room contract (M1.8)
 
 A refresh reads the league's standings pages (50 entries each) until the manager's own entry is

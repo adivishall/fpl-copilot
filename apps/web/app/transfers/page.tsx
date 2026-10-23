@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RecordDecision } from "@/components/journal";
 import { LifecycleBadge, WhatChanged } from "@/components/lifecycle";
 import { PlayerPicker } from "@/components/player-picker";
 import { Badge, Callout, Card, PageHeader, PlayerName, Prob, State, confidenceTone, useApi } from "@/components/ui";
 import { track } from "@/lib/analytics";
-import { ApiError, api, post, type PlanSpec, type PlayerRow, type WorkbenchContext, type WorkbenchPlan, type WorkbenchPreferences, type WorkbenchRun } from "@/lib/api";
+import { ApiError, api, post, type LeagueList, type LeagueView, type PlanSpec, type PlayerRow, type WorkbenchContext, type WorkbenchPlan, type WorkbenchPreferences, type WorkbenchRivalsIn, type WorkbenchRun } from "@/lib/api";
 import { money, pct, signed, when } from "@/lib/format";
 import { horizonMax, loadSettings } from "@/lib/settings";
 
@@ -21,11 +22,30 @@ import { horizonMax, loadSettings } from "@/lib/settings";
 
 const STATUS: Record<string, string> = { a: "available", d: "doubtful", i: "injured", s: "suspended", u: "unavailable", n: "not in squad" };
 
+function gapText(gap: number) {
+  if (gap === 0) return "level with you";
+  return gap > 0 ? `${gap} ahead of you` : `${-gap} behind you`;
+}
+
+function pm(p: number, se: number) {
+  return `${pct(p)} ± ${(100 * se).toFixed(1)}`;
+}
+
+export default function TransferWorkbench() {
+  // useSearchParams needs a Suspense boundary (the Mini-League page hands over ?league=…)
+  return (
+    <Suspense>
+      <Workbench />
+    </Suspense>
+  );
+}
+
 function actionTone(a: string): "good" | "warn" | "bad" | "neutral" {
   return a === "HOLD" ? "neutral" : a === "HIT" ? "warn" : "good";
 }
 
-export default function TransferWorkbench() {
+function Workbench() {
+  const params = useSearchParams();
   const [settings] = useState(loadSettings);
   const ctx = useApi<WorkbenchContext>(`/workbench/context?manager_key=${settings.managerKey}`);
   const [out, setOut] = useState<number | null>(null);
@@ -44,6 +64,31 @@ export default function TransferWorkbench() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // rival-aware view (M1.9): a followed league, the side to plan against, the rivals ticked
+  const [leagueId, setLeagueId] = useState<number | null>(() => {
+    const q = Number(params.get("league"));
+    return Number.isInteger(q) && q > 0 ? q : null;
+  });
+  const [perspective, setPerspective] = useState<"protect" | "chase">(params.get("perspective") === "chase" ? "chase" : "protect");
+  const [rivalEntries, setRivalEntries] = useState<number[]>([]);
+  const leagues = useApi<LeagueList>(`/leagues?manager_key=${settings.managerKey}`);
+  const leagueView = useApi<LeagueView>(leagueId ? `/leagues/${leagueId}?manager_key=${settings.managerKey}` : null, [leagueId]);
+  const myRank = leagueView.data?.data?.me.rank ?? null;
+  const sideRivals = useMemo(() => {
+    const d = leagueView.data?.data;
+    if (!d || myRank === null) return [];
+    return d.rivals
+      .filter((r) => (perspective === "protect" ? r.rank > myRank : r.rank < myRank))
+      .sort((a, b) => Math.abs(a.rank - myRank) - Math.abs(b.rank - myRank));
+  }, [leagueView.data, perspective, myRank]);
+  useEffect(() => {
+    // the default selection: the three nearest rivals on that side whose squad could be read
+    setRivalEntries(sideRivals.filter((r) => !r.unavailable).slice(0, 3).map((r) => r.entry));
+  }, [sideRivals]);
+  const rivalsBody: WorkbenchRivalsIn | undefined = useMemo(() => {
+    if (!leagueId || !rivalEntries.length) return undefined;
+    return { league_id: leagueId, perspective, entries: [...rivalEntries].sort((a, b) => a - b), max_rivals: Math.min(5, Math.max(1, rivalEntries.length)) };
+  }, [leagueId, perspective, rivalEntries]);
   // the run this page is showing: a poll or a late response for another run never replaces it
   const shown = useRef<string | null>(null);
   const setRun = useCallback((r: WorkbenchRun | null, expect?: string) => {
@@ -115,16 +160,18 @@ export default function TransferWorkbench() {
     if (out !== null && mode === "transfer" && incoming) plans.push({ kind: "transfer", label: "your transfer", sells: [out], buys: [incoming.player_code] });
     if (ladder) plans.push({ kind: "ladder", label: "ladder", allow_hits: allowHits, max_transfers: rungs ? Number(rungs) : null });
     if (includeBest) plans.push({ kind: "best", label: "best", allow_hits: allowHits, max_transfers: maxTransfers ? Number(maxTransfers) : null, alternatives: 1 });
-    await submit({ manager_key: settings.managerKey, horizon, profile: settings.profile, plans, preferences });
+    await submit({ manager_key: settings.managerKey, horizon, profile: settings.profile, plans, preferences, rivals: rivalsBody });
   }
 
   // retrying a failed run asks *its* question again (its plans, horizon, profile, preferences
   // and squad state), not whatever the form holds now: the same run is re-queued
   async function retry(r: WorkbenchRun) {
-    await submit({ manager_key: settings.managerKey, state_id: r.state_id, horizon: r.request.horizon, profile: r.request.profile, plans: r.request.plans, preferences: r.request.preferences });
+    const pinned = r.request.rivals;
+    const rivals: WorkbenchRivalsIn | undefined = pinned ? { league_id: pinned.league_id, perspective: "selected", entries: pinned.rivals.map((x) => x.entry) } : undefined;
+    await submit({ manager_key: settings.managerKey, state_id: r.state_id, horizon: r.request.horizon, profile: r.request.profile, plans: r.request.plans, preferences: r.request.preferences, rivals });
   }
 
-  async function submit(body: { manager_key: string; state_id?: string; horizon: number; profile: string; plans: PlanSpec[]; preferences?: WorkbenchPreferences }) {
+  async function submit(body: { manager_key: string; state_id?: string; horizon: number; profile: string; plans: PlanSpec[]; preferences?: WorkbenchPreferences; rivals?: WorkbenchRivalsIn }) {
     setBusy(true);
     setErr(null);
     setSelected(null);
@@ -134,7 +181,7 @@ export default function TransferWorkbench() {
       // nothing else (the initial latest-run load, a late poll) may put another run on it
       shown.current = "pending";
       setRunState(null);
-      const r = await post<WorkbenchRun>("/workbench/evaluate", body.preferences ? body : { ...body, preferences: undefined });
+      const r = await post<WorkbenchRun>("/workbench/evaluate", { ...body, preferences: body.preferences ?? undefined, rivals: body.rivals ?? undefined });
       setRun(r);
       track("workbench_evaluated", { plans: body.plans.length, horizon: body.horizon });
     } catch (e) {
@@ -298,6 +345,58 @@ export default function TransferWorkbench() {
               </ul>
             ) : null}
           </details>
+          <details data-testid="wb-rivals" open={!!leagueId}>
+            <summary className="small">
+              Against your rivals: {leagueId && rivalsBody ? `${rivalEntries.length} rival${rivalEntries.length === 1 ? "" : "s"} of ${leagues.data?.leagues.find((l) => l.league_id === leagueId)?.league_name ?? `league ${leagueId}`}` : "off"}
+            </summary>
+            <p className="small">
+              Scores every plan against rivals of a league you follow, on the same simulation samples: the chance of being above them on total points after this gameweek, beside expected points.
+              A rival's squad is their public picks at the last deadline; a rival whose picks could not be read is listed, never estimated.
+            </p>
+            {leagues.data && !leagues.data.leagues.length ? <p className="small muted">You follow no league yet (Plan → Mini-League).</p> : null}
+            {leagues.data?.leagues.length ? (
+              <div className="row">
+                <label>
+                  League{" "}
+                  <select value={leagueId ?? ""} onChange={(e) => setLeagueId(e.target.value ? Number(e.target.value) : null)} data-testid="rival-league">
+                    <option value="">none</option>
+                    {leagues.data.leagues.map((l) => <option key={l.league_id} value={l.league_id}>{l.league_name ?? `league ${l.league_id}`}</option>)}
+                  </select>
+                </label>
+                {leagueId ? (
+                  <>
+                    <label><input type="radio" name="perspective" checked={perspective === "protect"} onChange={() => setPerspective("protect")} data-testid="perspective-protect" /> protect my lead (rivals below me)</label>
+                    <label><input type="radio" name="perspective" checked={perspective === "chase"} onChange={() => setPerspective("chase")} data-testid="perspective-chase" /> chase (rivals above me)</label>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+            {leagueId ? <State loading={leagueView.loading} error={leagueView.error} retry={leagueView.reload} /> : null}
+            {leagueId && leagueView.data && leagueView.data.status !== "succeeded" ? (
+              <p className="small error" data-testid="rival-league-unready">This league has no readable standings yet ({leagueView.data.status}); read it on the Mini-League page first.</p>
+            ) : null}
+            {leagueId && leagueView.data?.data && myRank !== null ? (
+              <ul className="clean" data-testid="rival-list">
+                <li className="small muted">You: rank {myRank}, {leagueView.data.data.me.total} points (standings read {when(leagueView.data.data.fetched_at)}).</li>
+                {sideRivals.length === 0 ? <li className="small">No analysed rival on that side of you.</li> : null}
+                {sideRivals.map((r) => (
+                  <li key={r.entry} className="small">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={rivalEntries.includes(r.entry)}
+                        disabled={!!r.unavailable || (!rivalEntries.includes(r.entry) && rivalEntries.length >= 5)}
+                        onChange={(e) => setRivalEntries((l) => (e.target.checked ? [...l, r.entry] : l.filter((x) => x !== r.entry)))}
+                        data-testid={`rival-pick-${r.entry}`}
+                      />{" "}
+                      #{r.rank} {r.entry_name} ({r.player_name}) — {r.total} pts, {gapText(r.total - leagueView.data!.data!.me.total)}
+                      {r.unavailable ? <span className="muted"> — squad unavailable: {r.unavailable}</span> : null}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </details>
           <p>
             <button onClick={() => void evaluate()} disabled={busy || pending || !c || (mode === "transfer" && out !== null && !incoming)} data-testid="evaluate">
               {busy ? "Submitting…" : pending ? "Evaluating…" : "Evaluate plans"}
@@ -403,6 +502,74 @@ export default function TransferWorkbench() {
             </>
           ) : null}
         </Card>
+
+        {res && hold && res.rivals ? (
+          <Card title={`Against your rivals (${res.rivals.perspective === "chase" ? "chase" : res.rivals.perspective === "protect" ? "protect your lead" : "selected rivals"})`} testId="rivals-view" wide tone="accent">
+            <p className="small" data-testid="rivals-observed">
+              <strong>Observed</strong> (FPL standings read {when(res.rivals.fetched_at)}): you are {res.rivals.my_rank !== null ? `rank ${res.rivals.my_rank}` : "unranked"}
+              {res.rivals.my_total !== null ? ` with ${res.rivals.my_total} points` : ""}
+              {res.rivals.rivals.map((r) => `; ${r.name}${r.rank !== null ? ` (#${r.rank})` : ""} ${gapText(r.points_gap)}`).join("")}.
+            </p>
+            {run?.rivals_status?.stale ? (
+              <Callout tone="warn" testId="rivals-stale">{run.rivals_status.reason}: the numbers below rest on the read they were computed from.</Callout>
+            ) : null}
+            {res.rivals.unavailable.length ? (
+              <p className="small" data-testid="rivals-unavailable">Not scored (squad unavailable): {res.rivals.unavailable.map((u) => `${u.name} — ${u.reason}`).join(" · ")}.</p>
+            ) : null}
+            {res.rivals.ranking ? (
+              <>
+                <Callout tone={res.rivals.ranking.agree ? "good" : res.rivals.ranking.decisive ? "warn" : "info"} testId="rivals-verdict">
+                  <strong>Best for expected points:</strong> {res.rivals.ranking.best_by_points} · <strong>Best against these rivals:</strong> {res.rivals.ranking.best_by_rivals}
+                  {!res.rivals.ranking.agree ? (
+                    <> · choosing it costs <strong>{res.rivals.ranking.points_cost_of_rival_plan.toFixed(1)}</strong> expected points this gameweek for <strong>{signed(100 * res.rivals.ranking.p_gain_of_rival_plan, 1)} pp</strong> on P(above all) (± {(100 * res.rivals.ranking.p_gain_se).toFixed(1)})</>
+                  ) : null}
+                  <div className="small" data-testid="rivals-explanation">{res.rivals.ranking.explanation}</div>
+                </Callout>
+                <div className="table-wrap">
+                <table data-testid="rivals-table">
+                  <thead>
+                    <tr>
+                      <th>Plan</th><th className="num">E[pts] this GW</th><th className="num">vs hold</th><th className="num">Hit now</th><th>P(above all after)</th>
+                      {res.rivals.rivals.map((r) => <th key={r.entry}>P(above {r.name.split(" (")[0]} after)</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {res.plans.filter((p) => p.rivals).map((p) => {
+                      const rv = p.rivals!;
+                      const best = res.rivals!.ranking!;
+                      return (
+                        <tr key={p.label} data-testid={`rival-plan-${p.label}`} className={!p.valid ? "invalid" : p.label === "hold" ? "baseline" : p.label === best.best_by_rivals ? "selected" : undefined}>
+                          <td>
+                            <Badge tone={actionTone(p.action)}>{p.action}</Badge> <strong>{p.label}</strong>
+                            {p.label === best.best_by_points ? <> <Badge tone="good">best for points</Badge></> : null}
+                            {p.label === best.best_by_rivals ? <> <Badge tone="good">best vs rivals</Badge></> : null}
+                            {!p.valid ? <div className="error">illegal — not recommended</div> : null}
+                          </td>
+                          <td className="num">{rv.expected_points_1gw.toFixed(1)}</td>
+                          <td className="num">{p.label === "hold" ? <span className="muted">baseline</span> : signed(rv.expected_points_1gw - hold.expected_points_1gw)}</td>
+                          <td className="num">{p.hit_now ? `−${p.hit_now}` : "0"}</td>
+                          <td data-testid={`p-all-${p.label}`}><Prob p={rv.p_above_all_after} /> <span className="small muted">{pm(rv.p_above_all_after, rv.p_above_all_se)}{p.label === "hold" ? "" : ` · ${signed(100 * rv.p_above_all_vs_hold, 1)} pp vs hold`}</span></td>
+                          {res.rivals!.rivals.map((r) => {
+                            const o = rv.per_rival[r.entry];
+                            return <td key={r.entry}>{o ? <><Prob p={o.p_above_after} /> <span className="small muted">beat GW {pct(o.p_beat_this_gw)}</span></> : "—"}</td>;
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                </div>
+              </>
+            ) : (
+              <p className="small" data-testid="rivals-note">{res.rivals.note ?? "No plan could be ranked against the rivals."}</p>
+            )}
+            <p className="small">
+              <strong>Modelled</strong>: P(above … after) is the chance, on the same {res.rivals.n_samples} joint simulation samples as every plan, of being above a rival on total points after this
+              gameweek given the observed gap, with no transfer, hit or chip assumed for any rival — not a rank projection. "Above all" is one joint event per sample, not a product of the per-rival
+              chances; ± is one standard error of the estimate, and a difference within two standard errors is not evidence. Hits are already deducted from the plan's points.
+            </p>
+          </Card>
+        ) : null}
 
         {res && hold && (ladderPlans.length || ladderExcluded.length) ? (
           <Card title="Transfer ladder: what each transfer buys" testId="ladder" wide tone="accent">

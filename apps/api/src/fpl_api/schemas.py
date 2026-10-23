@@ -125,6 +125,19 @@ class WorkbenchPreferencesIn(_Req):
     banned: list[int] = Field(default_factory=list, max_length=50)
 
 
+class WorkbenchRivalsIn(_Req):
+    """Rival-aware view of a workbench run (M1.9): score every plan against rivals of one
+    followed league. ``protect`` selects the nearest rivals below the manager (keep them
+    below), ``chase`` the nearest above (get above them), ``selected`` exactly ``entries``;
+    ``entries`` may also narrow the first two. At most five rivals, only those whose public
+    squad could be read."""
+
+    league_id: int = Field(ge=1, le=50_000_000)
+    perspective: Literal["protect", "chase", "selected"] = "protect"
+    entries: list[int] = Field(default_factory=list, max_length=5)
+    max_rivals: int = Field(3, ge=1, le=5)
+
+
 class WorkbenchIn(_Req):
     """Transfer Workbench (M1.2): evaluate concrete plans for a stored squad state."""
 
@@ -134,6 +147,7 @@ class WorkbenchIn(_Req):
     horizon: int | None = Field(None, ge=1, le=SUPPORTED_HORIZON)
     plans: list[PlanSpec] = Field(min_length=1, max_length=8)
     preferences: WorkbenchPreferencesIn | None = None
+    rivals: WorkbenchRivalsIn | None = None
 
 
 class LeagueIn(_Req):
