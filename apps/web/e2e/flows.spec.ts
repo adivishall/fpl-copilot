@@ -497,6 +497,17 @@ test("rival-aware planning: the workbench scores every plan against the league's
     await page.getByTestId("league-tab-4242").click();
     await expect(page.getByTestId("league-state")).toHaveAttribute("data-state", "succeeded");
   }
+  // the snapshot-promotion flow above moved the served data a gameweek on; a squad saved before
+  // that is refused by every planning route (defect 65) until it is saved again — do what the
+  // message asks, through the product's own squad route, so the workbench accepts it
+  const ctx = await page.request.get(`/backend/workbench/context?manager_key=${key}`);
+  if (ctx.status() === 409) {
+    const st = (await (await page.request.get(`/backend/squad?manager_key=${key}`)).json()).state;
+    const saved = await page.request.post("/backend/squad", {
+      data: { manager_key: key, picks: st.squad.map((p: { player_code: number }) => ({ player_code: p.player_code })), bank: st.bank, free_transfers: st.free_transfers },
+    });
+    expect(saved.ok(), await saved.text()).toBe(true);
+  }
   await page.getByTestId("plan-chase").click();
   await expect(page).toHaveURL(/\/transfers\?league=4242&perspective=chase/);
   await expect(page.getByTestId("rival-league")).toHaveValue("4242");
