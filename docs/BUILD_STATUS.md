@@ -34,7 +34,7 @@ V1 release work after M14 is planned and logged in `docs/V1_RELEASE_PLAN.md`; it
 records are §2a and §2b (final). Public deployment waits on operator inputs (host, domain,
 secrets); everything else for V1 is done. Product milestones after V1 are recorded in §2c
 (M1.1a), §2d (M1.2), §2e (M1.3), §2f (M1.4), §2g (M1.5), §2h (M1.6), §2j (M1.7), §2k
-(M1.8), §2l (the Vercel front end and the Arm backend rehearsal) and §2m (reliability hardening); §2i is the release sprint.
+(M1.8), §2l (the Vercel front end and the Arm backend rehearsal), §2m (reliability hardening) and §2n (M1.9); §2i is the release sprint.
 
 ## 2. M14 verification record (2026-10-04 – 06, local machine)
 
@@ -657,6 +657,39 @@ TLS proxy's address is not trusted (the tunnel): a burst of anonymous requests c
 sign-in or public reads until the bucket refills; signed-in users are unaffected. 67. The tunnel is
 temporary: its hostname changes on every restart and the demo stops when this machine sleeps.
 Defects 52 and 53 are unchanged.
+
+## 2n. M1.9 — Rival-aware transfer planning (2026-10-23)
+
+Scope (owner directive of 2026-10-23): answer "which legal plan gives me the best chance of
+beating my selected mini-league rivals, and what do I give up against the best plan for
+expected points?" inside the existing Workbench and Mini-League experience, without changing
+the expected-points recommendation, inventing rival data or claiming rank effects.
+
+| Area | Result |
+|---|---|
+| Reused | the Workbench's paired evaluation (`plan_samples`: every plan's gameweek points per sample, net of its hit, on the serving forecast's joint simulation), the ladder and preferences, the independent validator (only valid plans are ranked), `fpl_decision.league.lineup_points` (a rival's lineup scored on the same samples, as the Mini-League outlook does), the followed league's stored read (`manager_leagues.data_json`: rivals' public lineups, ranks, totals, unavailability reasons, `fetched_at`), the workbench run store (content-addressed by request: a different rival selection is a different run; no migration), the snapshot-pinned workbench job, the owner-only league and run routes |
+| Engine | `fpl_decision.league`: `joint_above` (per sample: above every selected rival on totals), `plans_vs_rivals` (per plan × rival: P(beat this GW), P(level), P(above after) = P(plan − rival > published gap), P(level after), the paired difference's mean and 80 % band; per plan: P(above all) as one joint event per sample with its binomial SE, minus HOLD's), `rank_vs_rivals` (best by expected points and best by P(above all) among the valid plans, ties broken by the other criterion; the cost in expected points, the gain in probability with the **exact paired SE** from the per-sample difference of the two joint indicators, `decisive` = gain > 2 SE, and a plain-language explanation). `fpl_decision.workbench`: `RivalInputs` (pinned lineups, gaps, names, ranks, read time, unavailable list), `PlanEvaluation.rivals`, `WorkbenchResult.rivals` (`RivalSummary` with the ranking), two assumptions lines, a `rivals` timing. Unit tests 5/5 on hand-built samples (pairing with the gap folded in; joint ≠ product of marginals; rankings that disagree; exact paired SE; eligibility; input validation) |
+| API | `rivals` on `POST /workbench/evaluate` (`league_id`, `perspective` protect/chase/selected, `entries` ≤ 5, `max_rivals` 1–5); `resolve_rivals` picks the nearest analysed rivals on the asked side from the manager's own league row and pins them into the request (`404` league not followed by this manager; `422` no readable standings, nobody selected, unknown entry, wrong side, no readable squad); the job rebuilds `RivalInputs` from the pinned request only (never re-reads the league); `GET /workbench/runs/{id}` adds `rivals_status` (`stale` when the league was read again or dropped). Integration tests 4/4 on the synthetic league (protect → ranks 9–11 with gaps −7/−14/−21, chase → 7/6/5, `max_rivals`, the leader at +49, distinct runs per selection and the same run for the same question, the plain evaluation untouched; every refusal with its text; another user's manager `404` and their read of the run `403`; an unreadable rival listed and skipped, all unreadable → `422`; a dropped league → `rivals_status.stale`) and an engine-level test on the fixture world (a rival holding exactly HOLD's lineup is beaten with certainty; every plan carries both rivals' metrics on the run's sample count) |
+| Web | Transfer Workbench: an *Against your rivals* control (league from the followed list, perspective, the nearest three readable rivals ticked by default, up to five, unreadable ones shown disabled with the reason, the observed gaps beside each), the request carries the selection, retry re-asks the pinned one; results: an *Against your rivals* card with the **observed** line (read time, your rank and total, each rival's published gap), a stale warning from `rivals_status`, the unavailable list, the verdict (best for points vs best against rivals, the expected-points cost and the probability gain ± its SE, the explanation), a table per plan (E[pts] this GW, vs hold, hit, P(above all) ± SE and vs hold, per rival P(above after) with P(beat GW)), and a **modelled** footnote. Mini-League page: *protect your lead* / *chase* links that open the Workbench with the league and perspective preselected (`?league=&perspective=`). Development browser flow added (hand-off, default selection per side, evaluation, verdict, parity with the stored run) |
+
+Tests: Python fast tier **600 passed, 6 deselected** in 10 min 3 s on the milestone code (586 → 600: 5 unit, 4 API, 1 engine, and the 4 hardening tests now in the tier), unit tier + the API file 424/424 again after the lockfile change; lint, format (308 files), mypy (126 files), import-linter 4/4 clean; `tsc`, `next build`, Node unit tests 6/6; development browser suite in CI **19/19** (18 + the rival-planning flow). Dependency audit: `opentelemetry-api` 1.45.0 → 1.45.1 (advisory published 2026-10-23). Three CI rounds found real things first: the e2e world's snapshot-promotion flow moves the served data from GW2 to GW3, so the new flow met the defect 65 guard (`409`) on the Workbench context — the flow now re-saves the squad as the message asks; the pinned rivals are listed nearest first (rank 7, then 6), which the flow's assertion had the other way round.
+
+CI: `852c6c2` ([run 39896556411](https://github.com/adivishall/fpl-copilot/actions/runs/39896556411): `security` on the new advisory, `web-e2e` on the guard) → `03dba77` (run 39898656353: only the order assertion) → **`a28238d`** ([run 39901100784](https://github.com/adivishall/fpl-copilot/actions/runs/39901100784) **success** on every job: lint, security, test, optimiser suite, web e2e, containers); `develop` fast-forwarded to `a28238d`.
+
+Public demo: Vercel deployment 6Ev8ubGL9 of `a28238d` (Production, current) on https://fpl-copilot-alpha.vercel.app against the local stack on the rebuilt engine image, through a restarted tunnel (Cloudflare revoked the previous quick tunnel; `FPL_API_INTERNAL_URL` re-pointed). Through the public site with a throwaway account: register, real import (manager 1), follow an 8-entry league (rank 7 of 8, 7 rivals readable), `POST /workbench/evaluate` with `rivals` (chase, two nearest) → run succeeded on 1,000 samples with both rivals pinned (gaps +16, +24), every plan carrying the metrics, a ranking (best for points ≠ best vs rivals, not decisive at SE 0.17 pp), `rivals_status` fresh, another manager's key `403`, erase `200`. Visual check on the production build at 375 px and desktop against the same backend: league and perspective preselected from the hand-off, the three nearest rivals ticked with their observed gaps, no horizontal overflow, the verdict and table rendered from the run's own numbers; the throwaway accounts were erased.
+
+Decisions and limitations: 64. One probability serves both perspectives — P(above all selected
+rivals after this gameweek) — which rewards upside when behind and robustness when ahead
+without an assumed utility; the expected-points ranking is untouched and both are shown. 65.
+Rivals do not move: their read lineup, captain and bench are scored as they are, with no
+transfer, hit or chip assumed; a rival who transfers before the deadline is modelled with the
+old squad, and the page says so. 66. P(above after) is the chance against *that* rival on
+total points after one gameweek, not a rank projection; nothing is claimed about other managers
+or later gameweeks. 67. Rivals whose picks could not be read are listed and never estimated; a
+run with none refuses. 68. Sampling noise is shown (one SE per probability, the exact paired SE
+on the trade-off); differences within two SE are labelled as not separable. Not done:
+head-to-head leagues, horizons beyond the next gameweek, re-evaluation on a league refresh, a
+combined objective. Defects 52 and 53 are unchanged.
 
 ## 3. Environment
 
