@@ -522,7 +522,10 @@ test("rival-aware planning: the workbench scores every plan against the league's
   await expect(page.getByTestId("rival-pick-900009")).toBeChecked();
   await expect(list).toContainText("7 behind you");
   await page.getByTestId("perspective-chase").click();
+  // switching back restores the default on that side in the same render (no unticked frame)
+  for (const e of [900007, 900006, 900005]) await expect(page.getByTestId(`rival-pick-${e}`)).toBeChecked();
   await page.getByTestId("rival-pick-900005").uncheck();
+  await expect(page.getByTestId("rival-pick-900005")).not.toBeChecked();
   await expect(page.getByTestId("wb-rivals")).toContainText("2 rivals");
   await page.getByTestId("include-ladder").uncheck();
   await page.getByTestId("evaluate").click();

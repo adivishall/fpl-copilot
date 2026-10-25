@@ -70,7 +70,9 @@ function Workbench() {
     return Number.isInteger(q) && q > 0 ? q : null;
   });
   const [perspective, setPerspective] = useState<"protect" | "chase">(params.get("perspective") === "chase" ? "chase" : "protect");
-  const [rivalEntries, setRivalEntries] = useState<number[]>([]);
+  // the manager's own ticks; null = the default (derived during render, never set by an effect,
+  // so a perspective change never shows a frame with the new side unticked)
+  const [picked, setPicked] = useState<number[] | null>(null);
   const leagues = useApi<LeagueList>(`/leagues?manager_key=${settings.managerKey}`);
   const leagueView = useApi<LeagueView>(leagueId ? `/leagues/${leagueId}?manager_key=${settings.managerKey}` : null, [leagueId]);
   const myRank = leagueView.data?.data?.me.rank ?? null;
@@ -81,10 +83,9 @@ function Workbench() {
       .filter((r) => (perspective === "protect" ? r.rank > myRank : r.rank < myRank))
       .sort((a, b) => Math.abs(a.rank - myRank) - Math.abs(b.rank - myRank));
   }, [leagueView.data, perspective, myRank]);
-  useEffect(() => {
-    // the default selection: the three nearest rivals on that side whose squad could be read
-    setRivalEntries(sideRivals.filter((r) => !r.unavailable).slice(0, 3).map((r) => r.entry));
-  }, [sideRivals]);
+  // the default selection: the three nearest rivals on that side whose squad could be read
+  const defaultEntries = useMemo(() => sideRivals.filter((r) => !r.unavailable).slice(0, 3).map((r) => r.entry), [sideRivals]);
+  const rivalEntries = picked ?? defaultEntries;
   const rivalsBody: WorkbenchRivalsIn | undefined = useMemo(() => {
     if (!leagueId || !rivalEntries.length) return undefined;
     return { league_id: leagueId, perspective, entries: [...rivalEntries].sort((a, b) => a - b), max_rivals: Math.min(5, Math.max(1, rivalEntries.length)) };
@@ -358,15 +359,15 @@ function Workbench() {
               <div className="row">
                 <label>
                   League{" "}
-                  <select value={leagueId ?? ""} onChange={(e) => setLeagueId(e.target.value ? Number(e.target.value) : null)} data-testid="rival-league">
+                  <select value={leagueId ?? ""} onChange={(e) => { setLeagueId(e.target.value ? Number(e.target.value) : null); setPicked(null); }} data-testid="rival-league">
                     <option value="">none</option>
                     {leagues.data.leagues.map((l) => <option key={l.league_id} value={l.league_id}>{l.league_name ?? `league ${l.league_id}`}</option>)}
                   </select>
                 </label>
                 {leagueId ? (
                   <>
-                    <label><input type="radio" name="perspective" checked={perspective === "protect"} onChange={() => setPerspective("protect")} data-testid="perspective-protect" /> protect my lead (rivals below me)</label>
-                    <label><input type="radio" name="perspective" checked={perspective === "chase"} onChange={() => setPerspective("chase")} data-testid="perspective-chase" /> chase (rivals above me)</label>
+                    <label><input type="radio" name="perspective" checked={perspective === "protect"} onChange={() => { setPerspective("protect"); setPicked(null); }} data-testid="perspective-protect" /> protect my lead (rivals below me)</label>
+                    <label><input type="radio" name="perspective" checked={perspective === "chase"} onChange={() => { setPerspective("chase"); setPicked(null); }} data-testid="perspective-chase" /> chase (rivals above me)</label>
                   </>
                 ) : null}
               </div>
@@ -386,7 +387,7 @@ function Workbench() {
                         type="checkbox"
                         checked={rivalEntries.includes(r.entry)}
                         disabled={!!r.unavailable || (!rivalEntries.includes(r.entry) && rivalEntries.length >= 5)}
-                        onChange={(e) => setRivalEntries((l) => (e.target.checked ? [...l, r.entry] : l.filter((x) => x !== r.entry)))}
+                        onChange={(e) => setPicked(e.target.checked ? [...rivalEntries, r.entry] : rivalEntries.filter((x) => x !== r.entry))}
                         data-testid={`rival-pick-${r.entry}`}
                       />{" "}
                       #{r.rank} {r.entry_name} ({r.player_name}) — {r.total} pts, {gapText(r.total - leagueView.data!.data!.me.total)}
